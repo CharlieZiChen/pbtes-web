@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>闭式循环相变填充床储热系统 · 演示与数据库</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css?v=9fee2b02">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo"><div class="mark">PB</div><div><div class="name">闭式循环相变填充床储热 <span class="sub">PBTES · CLOSED LOOP</span></div><div class="eyebrow">Fluent 床层 · UDF 换热器 · 演示与数据库</div></div></div>
+    <div class="tabs" id="tabs">
+      <button data-view="demo" class="on"><span class="k">1</span>演示 <span class="k">DEMO</span></button>
+      <button data-view="library"><span class="k">2</span>数据库 <span class="k">LIBRARY</span></button>
+    </div>
+    <div class="seg" id="modeSeg" style="margin-left:6px">
+      <button data-mode="charge" class="on"><span class="k">01</span>充热</button>
+      <button data-mode="discharge"><span class="k">02</span>放热</button>
+      <button data-mode="open"><span class="k">00</span>开环</button>
+    </div>
+    <button class="btn" id="btnCycle" style="margin-left:6px" title="同一组参数下充热 → 放热连续回放"><span class="k">03</span>充放周期</button>
+    <div class="tools" id="demoTools">
+      <button class="btn" id="btnView">重置视角 <span class="k">R</span></button>
+      <button class="btn" id="btnGlass">玻璃罐体 <span class="k">G</span></button>
+      <button class="btn primary" id="btnOverview">系统总览 <span class="k">?</span></button>
+    </div>
+  </header>
+
+  <!-- ============ 视图一：演示 ============ -->
+  <section id="view-demo" class="view on">
+    <div id="stage" style="position:absolute;inset:0">
+      <canvas id="c3d"></canvas>
+      <div id="labels"></div>
+      <div id="legend"><div class="eyebrow">Components / 点击查看</div></div>
+      <div id="modecard">
+        <div class="eyebrow" id="mcEyebrow">01 / CHARGING · 充热</div>
+        <h3 id="mcTitle"></h3>
+        <p id="mcDesc"></p>
+        <div class="path" id="mcPath"></div>
+      </div>
+      <div id="scale"><div class="eyebrow">PCM 温度着色（示意）</div><div class="bar"></div><div class="ticks mono"><span>20</span><span>60</span><span>105</span><span>150</span><span>200 °C</span></div></div>
+      <div id="hint"><span><b>拖动</b> 旋转</span><span><b>滚轮</b> 缩放</span><span><b>点击部件 / 标签</b> 查看信息</span><span><b>空格</b> 播放</span><span><b>1 / 2</b> 切换视图</span></div>
+    </div>
+  </section>
+
+  <!-- ============ 视图二：数据库 ============ -->
+  <section id="view-library" class="view">
+    <div class="libbar">
+      <div class="row1">
+        <div><div class="eyebrow">LIBRARY / 数据库</div><h2>按日期浏览计算结果 <span class="count" id="libCount"></span></h2></div>
+        <div class="tabs" id="libTabs" style="margin-left:auto"><button data-tab="stages" class="on">阶段 <span class="k" id="nStages"></span></button><button data-tab="cycles">周期 <span class="k" id="nCycles"></span></button><button data-tab="compare">对比 <span class="k" id="nCmps"></span></button></div>
+      </div>
+      <div id="selbar"><span class="eyebrow">SELECTION / 已选</span><span id="selInfo"></span><button class="btn primary" id="selCompare">对比所选</button><button class="btn" id="selClear">清空</button></div>
+      <div class="filters" id="libFilters">
+        <span class="lab">模式</span><select id="f-mode"><option value="">全部</option><option value="charge">充热</option><option value="discharge">放热</option><option value="open">开环</option></select>
+        <span class="lab">UA</span><select id="f-ua"></select>
+        <span class="lab">ṁ₂</span><select id="f-m2"></select>
+        <span class="lab">状态</span><select id="f-status"></select>
+        <span class="lab">项目</span><select id="f-project"></select>
+        <span class="lab">日期</span><input id="f-date" placeholder="2026-07" style="min-width:110px">
+        <input id="f-q" placeholder="搜索 case_id / 备注 / 标签">
+        <button class="btn" id="f-clear">清除</button>
+      </div>
+      <div class="legend-status">
+        <span class="status-badge ok"><span class="d"></span>参数吻合</span>
+        <span class="status-badge low"><span class="d"></span>有效 UA 偏低（数值分支）</span>
+        <span class="status-badge na"><span class="d"></span>不可辨识（ε≈1）</span>
+        <span class="status-badge bad"><span class="d"></span>疑似失败</span>
+        <span class="status-badge open"><span class="d"></span>开环基准</span>
+      </div>
+    </div>
+    <div class="liblist" id="liblist"></div>
+  </section>
+
+  <!-- ============ 右侧抽屉（两视图共用） ============ -->
+  <aside>
+    <div class="head">
+      <div class="titles"><div class="eyebrow" id="dEyebrow">SYSTEM / 总览</div><h2 id="dTitle">系统总览</h2><div class="en" id="dEn"></div></div>
+      <button class="close" id="dClose" title="返回">×</button>
+    </div>
+    <div class="body" id="dBody"></div>
+    <div class="detail-actions" id="dActions"></div>
+  </aside>
+
+  <!-- ============ 底部时间轴（仅演示视图） ============ -->
+  <footer id="footer">
+    <button class="play" id="btnPlay" title="播放 / 暂停"><svg viewBox="0 0 16 16" id="icoPlay"><path d="M4 2.5v11l9-5.5z"/></svg></button>
+    <div class="timeline">
+      <div class="row"><b id="tlTime">t = 0.0 min</b><span class="curdata" id="curData"><span id="curLabel"></span><button id="btnPickData">从数据库选择</button></span><span id="tlCase" style="margin-left:auto;opacity:.7"></span><span class="speed" id="speed" style="margin-left:12px"><button data-s="0.5">0.5×</button><button data-s="1" class="on">1×</button><button data-s="2">2×</button><button data-s="4">4×</button></span></div>
+      <div class="tlwrap"><input type="range" id="tl" min="0" max="1000" value="0"><div id="tlMark" title="充热 → 放热 切换"></div></div>
+    </div>
+    <div class="readouts">
+      <div class="ro" id="roTin"><div class="t">床层入口 T_bed,in</div><div class="v">—</div></div>
+      <div class="ro" id="roTout"><div class="t">床层出口 T_bed,out</div><div class="v">—</div></div>
+      <div class="ro" id="roT2out"><div class="t">二次侧出口 T₂,out</div><div class="v">—</div></div>
+      <div class="ro" id="roQ"><div class="t">床层功率 Q_bed</div><div class="v">—</div></div>
+      <div class="ro" id="roE"><div class="t">累计 E_bed</div><div class="v">—</div></div>
+    </div>
+  </footer>
+</div>
+
+<script src="three.min.js?v=912bc7c1"></script>
+<script src="OrbitControls.js?v=035e216c"></script>
+<script src="library.js?v=f4216367"></script>
+<script src="content.js?v=3d268188"></script>
+<script src="scene.js?v=d61ef522"></script>
+<script src="app.js?v=dfed4ce7"></script>
+</body>
+</html>
