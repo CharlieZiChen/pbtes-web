@@ -85,6 +85,17 @@ aside .body{padding:6px 22px 22px;overflow:auto;flex:1}
 .kv div{min-width:0;overflow-wrap:anywhere}
 .formula{font-family:var(--mono);font-size:12px;color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin:6px 0;line-height:1.6;overflow-x:auto}
 .formula .c{color:var(--muted);font-size:11px}
+.formula-panel{margin-top:13px;padding:11px 13px;border:1px solid var(--line);border-left:3px solid #bdcfee;border-radius:8px;background:#f8fafd;min-width:0;line-height:1.65;font-size:11px;color:var(--text2);overflow-wrap:anywhere}
+.formula-panel h3,.formula-panel h4{font:600 11px var(--sans);margin:0 0 5px;color:var(--ink)}
+.formula-heading{font:600 11px var(--sans);margin:0 0 5px;color:var(--text2)}
+.formula-main{font:12px var(--mono);line-height:1.9;color:var(--ink);white-space:normal;overflow-wrap:anywhere}
+.formula-main p{margin:2px 0!important;color:inherit!important}
+.formula-details{margin-top:7px;font-size:11px}.formula-details summary{cursor:pointer;color:var(--brand);font-family:var(--sans)}
+.formula-variables,.formula-notes{margin:6px 0;padding-left:17px;font:11px var(--sans);line-height:1.7}
+.pcm-probe-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+.pcm-probe-panel{min-width:0;padding:10px 7px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.pcm-probe-panel h5{margin:0 4px 6px;font:600 10px var(--mono);overflow-wrap:anywhere;line-height:1.6}
+@media(max-width:640px){.pcm-probe-grid{grid-template-columns:1fr}}
 .note{border-left:3px solid var(--amber);background:var(--amber-tint);padding:8px 12px;border-radius:0 8px 8px 0;font-size:12.5px;line-height:1.6;color:var(--ink)}
 .note.blue{border-color:var(--brand);background:var(--brand-tint)}
 .tag{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 7px;border:1px solid var(--line);border-radius:6px;color:var(--text2);margin:0 4px 4px 0;background:#fff}

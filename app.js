@@ -39,6 +39,11 @@ const COMPARISONS=(LIB.comparisons||[]).filter(c=>c.members.every(m=>STAGE_BY_ID
 const CMP_BY_ID=Object.fromEntries(COMPARISONS.map(c=>[c.cmp_id,c]));
 const TYPE_CN={replicate:"重复性 / 误差分析",param_ua:"同 UA · ṁ₂ 变化 → η_b",param_m2:"同 ṁ₂ · UA 变化 → η_b"};
 const PALETTE=["#1264FF","#E3A83A","#12A56B","#8B5CF6","#E0475B","#0EA5B7","#B97708","#64748B"];
+const PROBE_PALETTE=["#1264FF","#B97708","#0C9B70","#7157C9","#D04D63","#079AA8","#637C48","#A56E96","#344F80","#BD682A","#946200","#246D62"];
+const probeStyle=k=>{const i=Math.max(0,parseInt(k.slice(10,12),10)-1);return {color:PROBE_PALETTE[i%PROBE_PALETTE.length],dash:i>=8?"7 3":false};};
+const formulaContext=s=>({phase:phaseOf(s),loop:isOpen(s)?"open":"closed",axis:"time",legacy:!researchStage(s)});
+const formulaPanel=(key,context)=>key&&window.PBTES_FORMULAS?window.PBTES_FORMULAS.render(key,context):"";
+const formulaDescription=o=>o.formulaKey&&window.PBTES_FORMULAS?`<desc>${esc(window.PBTES_FORMULAS.text(o.formulaKey,o.formulaContext))}</desc>`:"";
 function cycleLabel(c){ return `cyc · ua${g(c.UA_W_K)} · m${g(c.mdot2_kg_h)}`; }
 function statusClass(ds){ if(!ds) return "na"; if(ds.startsWith("参数吻合")) return "ok"; if(ds.startsWith("有效 UA 偏低")||ds.startsWith("待验收")) return "low"; if(ds.startsWith("疑似")||ds.startsWith("有效 UA 偏高")||ds==="UDF 诊断异常"||ds==="超出换热量物理上限") return "bad"; if(ds.startsWith("开环")) return "open"; return "na"; }
 function stageLabel(s){ const c=s.c; const p=c.params||{}; const parts=[isOpen(s)?"开环"+(MODE_CN[phaseOf(s)]||""):(MODE_K[s.mode]||s.mode)];
@@ -269,8 +274,8 @@ function renderLibrary(){
   list.querySelectorAll(".stage-row").forEach(r=>{ r.onclick=(e)=>{ if(e.target.classList.contains("selbox")){ toggleSel(e.target.dataset.id,e.target.checked); return; } const act=e.target.dataset&&e.target.dataset.act; const sid=r.dataset.id;
     if(act==="play"){ loadStage(sid,{keepInfo:true}); go("demo"); return; } state.libSel=sid; go("library",encodeURIComponent(sid)); }; });
 }
-function wfBar(wf){ if(!wf) return '<span class="dim">无㶲瀑布（缺对应窗口数据）</span>'; const P=wf.pct;
-  return `<div class="wfbar" title="以 E_src 为 100 %"><span class="wf-hxc" style="width:${P.HX_charge}%"></span><span class="wf-bed" style="width:${P.bed_internal}%"></span><span class="wf-hxd" style="width:${P.HX_discharge}%"></span><span class="wf-del" style="width:${P.delivered}%"></span></div>`; }
+function wfBar(wf,details=false){ if(!wf) return '<span class="dim">无㶲瀑布（缺对应窗口数据）</span>'; const P=wf.pct;
+  return `<div class="wfbar" title="以 E_src 为 100 %"><span class="wf-hxc" style="width:${P.HX_charge}%"></span><span class="wf-bed" style="width:${P.bed_internal}%"></span><span class="wf-hxd" style="width:${P.HX_discharge}%"></span><span class="wf-del" style="width:${P.delivered}%"></span></div>${details?formulaPanel("legacy_waterfall",{phase:"cycle",loop:"closed",window:"历史配对记录中的全程指标窗口"}):'<p class="dim">比例 = 100 × 各项㶲 / 热源㶲（%）</p>'}`; }
 const WF_LEGEND='<div class="wflegend"><span><i class="wf-hxc"></i>换热器·充 E_D</span><span><i class="wf-bed"></i>床层内部 + 壁损 + 未放出</span><span><i class="wf-hxd"></i>换热器·放 E_D</span><span><i class="wf-del"></i>交付 E_del</span></div>';
 function renderCycles(){
   const list=$("#liblist"), cycles=scopedCycles(); $("#libCount").textContent=`${cycles.length} 个配对周期 · 生成 ${LIB.generated_at||"—"}`;
@@ -292,13 +297,13 @@ function showCycleDetail(cid){
   const c=CYCLE_BY_ID[cid]; if(!c) return; const M=c.metrics; const cs=STAGE_BY_ID[c.charge_stage], ds=STAGE_BY_ID[c.discharge_stage]; const d=toCyclePlayback(c);
   $("#dEyebrow").textContent=`CYCLE / ${LINK_CN[c.link]||c.link}`; $("#dTitle").textContent=`UA ${g(c.UA_W_K)} W/K · ṁ₂ ${g(c.mdot2_kg_h)} kg/h 充放周期`; $("#dEn").textContent=c.cycle_id;
   const kv=(pairs)=>`<div class="kv dense">${pairs.filter(([k,v])=>v!=null&&v!=="").map(([k,v])=>`<div>${k}</div><div>${v}</div>`).join("")}</div>`; const pct=v=>v==null?null:(100*v).toFixed(1)+" %";
-  const temps=svgLine([{x:d.t,y:d.Tin,color:"#B97708",w:1.8},{x:d.t,y:d.Tout,color:"#E3A83A"},...(d.T2in?[{x:d.t,y:d.T2in,color:"#1264FF",dash:true},{x:d.t,y:d.T2out,color:"#7FA3FF"}]:[])],{title:"四端温度 (°C) · 切换 @ "+g(d.tsw)+" min",xlabel:"min"});
-  const ee=svgLine([{x:d.t,y:d.E,color:"#1264FF",w:1.8}],{title:"累计空气侧净输入（未扣壁损）(MJ)",xlabel:"min",ymin:0});
+  const temps=svgLine([{x:d.t,y:d.Tin,color:"#B97708",w:1.8},{x:d.t,y:d.Tout,color:"#E3A83A"},...(d.T2in?[{x:d.t,y:d.T2in,color:"#1264FF",dash:true},{x:d.t,y:d.T2out,color:"#7FA3FF"}]:[])],{title:"四端温度 (°C) · 切换 @ "+g(d.tsw)+" min",xlabel:"min",formulaKey:"boundary_temperature",formulaContext:{phase:"cycle",loop:d.T2in?"closed":"open"}});
+  const ee=svgLine([{x:d.t,y:d.E,color:"#1264FF",w:1.8}],{title:"累计空气侧净输入（未扣壁损）(MJ)",xlabel:"min",ymin:0,formulaKey:"cycle_net_input",formulaContext:{phase:"cycle",loop:d.T2in?"closed":"open"}});
   const wfRows=(lab,wf)=> wf? [[`E_src（${lab}）`,g(wf.E_src_MJ)+" MJ = 100 %"],["− 换热器·充 E_D",g(wf.HX_charge_destroyed_MJ)+" MJ · "+wf.pct.HX_charge.toFixed(1)+" %"],["− 床层内部 / 壁损 / 未放出",g(wf.bed_internal_MJ)+" MJ · "+wf.pct.bed_internal.toFixed(1)+" %"],["− 换热器·放 E_D",g(wf.HX_discharge_destroyed_MJ)+" MJ · "+wf.pct.HX_discharge.toFixed(1)+" %"],["= 交付 E_del",g(wf.delivered_MJ)+" MJ · "+wf.pct.delivered.toFixed(1)+" %"],["η_rt = E_del / E_src",pct(wf.eta_rt)]] : [];
   $("#dBody").innerHTML=`
     <div class="sec"><h4>配对</h4>${kv([["数据批次",datasetLabel(cycleDataset(c))],["方式",(LINK_CN[c.link]||c.link)+(c.needs_confirmation?"（待人工确认）":"")],["充热",`<a href="#library/${encodeURIComponent(c.charge_stage)}">${c.charge_case}</a>`],["放热",`<a href="#library/${encodeURIComponent(c.discharge_stage)}">${c.discharge_case}</a>`],["数据状态",`充 ${c.charge_status||"—"} / 放 ${c.discharge_status||"—"}`],["续算",ds.c.restart_from_step?`放热从第 ${ds.c.restart_from_step} 步续算，充热末步 ${cs.c.last_step}`:null]])}<div class="note">阶段曲线按相对时间拼接；当前配对信息不代替 checkpoint、case/data 的连续性核验。</div></div>
     <div class="sec"><h4>能量</h4>${kv([["充热 空气侧吸热 / 壁损",g(M.E_bed_air_charge_MJ)+" / "+g(M.E_wall_charge_MJ)+" MJ"],["净储能 E_net",g(M.E_net_stored_MJ)+" MJ"],["峰值放热 E_rel,peak",g(M.E_rel_peak_MJ)+" MJ @ "+g(M.t_peak_min)+" min"],["可回收比例 E_rel,peak / E_net",pct(M.recoverable_fraction)],["闭合度 (E_rel,peak + 壁损_放) / E_net",pct(M.closure_peak_plus_wall_over_net)],["床层均温 充末 → 放始",g(M.T_bed_end_charge_C)+" → "+g(M.T_bed_start_discharge_C)+" °C"],["时长 充 / 放",g(M.charge_duration_min)+" / "+g(M.discharge_duration_min)+" min"],["t₁₉₀（充）/ t₉₀（放）",g(M.t190_min)+" / "+g(M.t90_dis_min)+" min"],["T₂,out 放热最高",g(M.T2out_max_C)+" °C"]])}</div>
-    <div class="sec"><h4>㶲瀑布（全充热程 → 放热峰值）</h4>${wfBar(M.waterfall_full)}${WF_LEGEND}${kv(wfRows("全充热程",M.waterfall_full))}<p class="dim" style="margin-top:6px">η_b 全程充 ${pct(M.eta_b_charge_full??cs.st.metrics.eta_b_full)||"—"} · η_b 放 ${pct(M.eta_b_dis)||"—"}；使用实际充热全程的热源㶲作为往返效率分母。</p>${M.waterfall_240?`<p class="dim" style="margin-top:8px">历史 240 min 分母口径：${pct(M.waterfall_240.eta_rt)}。若充热超过 240 min，此比值仅供旧论文对照，不能代表完整周期效率。</p>`:""}</div>
+    <div class="sec"><h4>㶲瀑布（全充热程 → 放热峰值）</h4>${wfBar(M.waterfall_full,true)}${WF_LEGEND}${kv(wfRows("全充热程",M.waterfall_full))}<p class="dim" style="margin-top:6px">η_b 全程充 ${pct(M.eta_b_charge_full??cs.st.metrics.eta_b_full)||"—"} · η_b 放 ${pct(M.eta_b_dis)||"—"}；使用实际充热全程的热源㶲作为往返效率分母。</p>${M.waterfall_240?`<p class="dim" style="margin-top:8px">历史 240 min 分母口径：${pct(M.waterfall_240.eta_rt)}。若充热超过 240 min，此比值仅供旧论文对照，不能代表完整周期效率。</p>`:""}</div>
     <div class="sec"><h4>曲线</h4>${legend([{color:"#B97708",label:"床层入口"},{color:"#E3A83A",label:"床层出口"},...(d.T2in?[{color:"#1264FF",label:"T₂,in"},{color:"#7FA3FF",label:"T₂,out"}]:[])])}${temps}${ee}</div>`;
   $("#dActions").innerHTML=`<button class="primary" id="actPlay">连续回放</button><button id="actCopy">复制 cycle_id</button>`; $("#dActions").classList.add("on");
   $("#actPlay").onclick=()=>{ loadCycle(cid,{keepInfo:true}); go("demo"); };
@@ -390,13 +395,13 @@ function cmpRow(c,i){ const mem=c.members.map(m=>{ const s=STAGE_BY_ID[m.stage_i
 function svgBars(rows,o){
   const W=o.width||356,H=o.height||176,ml=40,mr=10,mt=28,mb=30; const iw=W-ml-mr, ih=H-mt-mb; const n=rows.length; const bw=Math.min(46,iw/n*0.6); const ymin=o.ymin??0, ymax=o.ymax??1;
   const Y=v=>mt+ih-(v-ymin)/(ymax-ymin)*ih, X=i=>ml+iw*(i+0.5)/n;
-  let svg=`<svg class="svgchart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg"><text class="ttl" x="${ml}" y="12">${o.title||""}</text>`;
+  let svg=`<svg class="svgchart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">${formulaDescription(o)}<text class="ttl" x="${ml}" y="12">${o.title||""}</text>`;
   [0,0.25,0.5,0.75,1].forEach(f=>{ const v=ymin+(ymax-ymin)*f; svg+=`<line class="grid" x1="${ml}" x2="${W-mr}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${ml-4}" y="${Y(v)+3}" text-anchor="end">${Math.round(100*v)}</text>`; });
   if(o.refLine!=null){ svg+=`<line x1="${ml}" x2="${W-mr}" y1="${Y(o.refLine)}" y2="${Y(o.refLine)}" stroke="#8490A3" stroke-width="1.2" stroke-dasharray="4 3"/><text x="${W-mr}" y="${Y(o.refLine)-3}" text-anchor="end" style="fill:var(--text2)">${o.refLabel||""}</text>`; }
   rows.forEach((r,i)=>{ const v=r.eta_b; if(v==null){ svg+=`<text x="${X(i)}" y="${Y(ymin)-4}" text-anchor="middle">—</text>`; } else { svg+=`<rect x="${X(i)-bw/2}" y="${Y(Math.max(ymin,v))}" width="${bw}" height="${Math.max(0,Y(ymin)-Y(Math.max(ymin,v)))}" rx="3" fill="${r.reliable?"#1264FF":"#c8d3e6"}"/><text x="${X(i)}" y="${Y(Math.max(ymin,v))-4}" text-anchor="middle" style="fill:var(--ink)">${(100*v).toFixed(1)}</text>`; }
     svg+=`<text x="${X(i)}" y="${H-16}" text-anchor="middle" style="fill:var(--ink)">${g(r.x)}</text>`; });
   svg+=`<line class="ax" x1="${ml}" x2="${W-mr}" y1="${mt+ih}" y2="${mt+ih}"/><text x="${W-mr}" y="${H-4}" text-anchor="end" style="fill:var(--text2)">${o.xlabel||""}</text>`;
-  return svg+"</svg>";
+  return svg+"</svg>"+formulaPanel(o.formulaKey,o.formulaContext);
 }
 function showCompareDetail(c){
   const ms=c.members.map((m,i)=>({m,s:STAGE_BY_ID[m.stage_id],color:PALETTE[i%PALETTE.length]})); const kv=(pairs)=>`<div class="kv dense">${pairs.filter(([k,v])=>v!=null&&v!=="").map(([k,v])=>`<div>${k}</div><div>${v}</div>`).join("")}</div>`;
@@ -411,17 +416,18 @@ function showCompareDetail(c){
       return `<tr><td><i class="swatch" style="background:${x?x.color:"#999"}"></i>${(r.stage_id||"").slice(0,13)}${r.identical_to_ref?' <span class="tag">逐点相同</span>':""}</td><td>${g(so.max_abs)} K<br><span class="dim">@${g(so.t_max_abs_min)} min</span></td><td>${g(so.rmse)} K</td><td>${g(si.max_abs)} K</td><td>${s2.max_abs!=null?g(s2.max_abs)+" K":"—"}</td><td>${sgn(r.metrics.E_at_common_end_MJ.rel_pct)} %</td><td>${sgn(r.metrics[ek].delta==null?null:100*r.metrics[ek].delta)} pt</td><td>${sgn(r.metrics[isDis?"t_peak_min":"t190_bed_out_min"].delta,1)} min</td></tr>`; }).join("")}</table>`;
     // 曲线：床层出口叠加 + 相对基准的差值
     const physical=e.time_base==="physical"; const T=x=>physical?physicalTimes(x.s):x.s.st.series.tau_min;
-    const over=svgLine(ms.map(x=>({x:T(x),y:x.s.st.series.bed_out_C,color:x.color,w:x.m.stage_id===e.ref?2:1.4,dash:x.m.stage_id!==e.ref&&false})),{title:"床层出口温度叠加 (°C)",xlabel:"min"});
+    const comparisonContext={phase:c.mode==="discharge"?"discharge":"charge",loop:"closed",axis:"time",legacy:true,window:`${g(e.common_start_min)}–${g(e.common_end_min)} min`};
+    const over=svgLine(ms.map(x=>({x:T(x),y:x.s.st.series.bed_out_C,color:x.color,w:x.m.stage_id===e.ref?2:1.4,dash:x.m.stage_id!==e.ref&&false})),{title:"床层出口温度叠加 (°C)",xlabel:"min",formulaKey:"boundary_temperature",formulaContext:{...comparisonContext,window:"各成员完整温度记录；差值图另取共同窗口"}});
     const grid=Array.from({length:160},(_,i)=>e.common_start_min+(e.common_end_min-e.common_start_min)*i/159); const R=refM?interp(T(refM),refM.s.st.series.bed_out_C,grid):null;
     const dser=R?ms.filter(x=>x.m.stage_id!==e.ref).map(x=>{ const y=interp(T(x),x.s.st.series.bed_out_C,grid); return {x:grid,y:y.map((v,i)=>(v==null||R[i]==null)?null:v-R[i]),color:x.color}; }):[];
-    const dchart=dser.length?svgLine(dser.concat([{x:grid,y:grid.map(()=>0),color:"#8490A3",dash:true,w:1}]),{title:"床层出口温度差 ΔT_out = 成员 − 基准 (K)",xlabel:"min"}):"";
+    const dchart=dser.length?svgLine(dser.concat([{x:grid,y:grid.map(()=>0),color:"#8490A3",dash:true,w:1}]),{title:"床层出口温度差 ΔT_out = 成员 − 基准 (K)",xlabel:"min",formulaKey:"temperature_difference",formulaContext:{...comparisonContext,timeBase:physical?"physical":"relative"}}):"";
     body+=`<div class="sec"><h4>判定</h4><p><span class="verdict ${e.level}">${e.verdict}</span></p>${kv([["基准",refM?`<i class="swatch" style="background:${refM.color}"></i>${refM.s?stageLabel(refM.s).replace(/^\w+ · /,""):e.ref}（最早运行）`:e.ref],["公共时长",`${g(e.common_start_min)} → ${g(e.common_end_min)} min · 网格 ${g(e.grid_step_min)} min · ${physical?"物理时间对齐":"阶段相对时间"}`],["最大 |ΔT_out|",g(e.criteria.max_abs_dT_out_K)+" K"],["最大 |Δη_b|",(100*(e.criteria.max_abs_d_eta_b||0)).toFixed(2)+" pt"],["最大 |ΔE| 公共末端",g(e.criteria.max_abs_dE_rel_pct)+" %"],["阈值",`良好：${e.thresholds.good}；小幅：${e.thresholds.minor}`]])}${e.notes.length?`<div class="note" style="margin-top:8px">${e.notes.join("<br>")}</div>`:""}</div>
       <div class="sec"><h4>误差统计（相对基准）</h4><div class="tblwrap">${tbl}</div><p class="dim" style="margin-top:6px">ΔE 末端 = 两者在公共末端时刻的累计能量相对差；Δη_b 用各自窗口（充热 0–240 min / 放热到峰值）。</p></div>
       <div class="sec"><h4>曲线</h4>${over}${dchart}</div>`;
   } else {
     const r=c.eta; const xn={UA_W_K:"UA (W/K)",mdot2_kg_h:"ṁ₂ (kg/h)"}[r.varying]; const isDis=c.mode==="discharge";
     const vals=r.rows.map(x=>x.eta_b).filter(v=>v!=null); const ymin=Math.max(0,Math.floor((Math.min(...vals,(r.reference_open?r.reference_open.eta_b_240:1))-0.1)*10)/10);
-    const bars=svgBars(r.rows,{title:(isDis?"η_b,dis":"η_b 0–240 min")+" (%)",xlabel:xn,ymin,ymax:1,refLine:r.reference_open?r.reference_open.eta_b_240:null,refLabel:r.reference_open?"开环 "+(100*r.reference_open.eta_b_240).toFixed(1)+" %":""});
+    const bars=svgBars(r.rows,{title:(isDis?"η_b,dis":"η_b 0–240 min")+" (%)",xlabel:xn,ymin,ymax:1,refLine:r.reference_open?r.reference_open.eta_b_240:null,refLabel:r.reference_open?"开环 "+(100*r.reference_open.eta_b_240).toFixed(1)+" %":"",formulaKey:"legacy_efficiency",formulaContext:{phase:isDis?"discharge":"charge",loop:r.reference_open?"mixed":"closed",legacy:true}});
     const tbl=isDis?`<table class="mini"><tr><th>${xn}</th><th>η_b,dis</th><th>E_rel / E_del</th><th>峰值放热</th><th>t₉₀</th><th>T₂,out max</th><th>UA_eff</th></tr>${r.rows.map(x=>{ const d=x.detail||{}; return `<tr class="${x.reliable?"":"unrel"}"><td>${g(x.x)}</td><td><b>${pct(x.eta_b)}</b></td><td>${g(d.Ex_rel_MJ)} / ${g(d.Ex_del_MJ)} MJ</td><td>${g(d.E_rel_peak_MJ)} MJ @ ${g(d.t_peak_min)}</td><td>${g(d.t90_min)} min</td><td>${g(d.T2out_max_C)} °C</td><td>${g(d.UA_eff_median_W_K)}</td></tr>`; }).join("")}</table>`
       :`<table class="mini"><tr><th>${xn}</th><th>η_b</th><th>E_src / E_gain / E_D</th><th>t₁₉₀</th><th>E₂₄₀</th><th>C_r / NTU / ε</th><th>UA_eff</th></tr>${r.rows.map(x=>{ const d=x.detail||{}; return `<tr class="${x.reliable?"":"unrel"}"><td>${g(x.x)}</td><td><b>${pct(x.eta_b)}</b></td><td>${g(d.Ex_src_240_MJ)} / ${g(d.Ex_gain_240_MJ)} / ${g(d.Ex_D_HX_240_MJ)}</td><td>${d.t190_bed_out_min!=null?g(d.t190_bed_out_min)+" min":"未到"}</td><td>${g(d.E_bed_240_MJ)} MJ</td><td>${g(x.Cr)} / ${g(x.NTU)} / ${g(x.eps_theory)}</td><td>${g(d.UA_eff_median_W_K)}</td></tr>`; }).join("")}</table>`;
     body+=`<div class="sec"><h4>η_b 对比</h4>${bars}<p style="margin-top:6px"><b>${r.trend||"可靠成员不足，无趋势"}</b></p>${r.excluded_from_trend.length?`<p class="dim" style="margin-top:4px">灰色柱不计入趋势（状态非「参数吻合 / 不可辨识」）：${r.excluded_from_trend.map(id=>id.slice(0,13)).join("、")}</p>`:""}${r.reference_open?`<p class="dim" style="margin-top:4px">虚线为开环基准 <a href="#library/${encodeURIComponent(r.reference_open.stage_id)}">${r.reference_open.case_id.slice(0,13)}</a>：η_b ${pct(r.reference_open.eta_b_240)}，t₁₉₀ ${g(r.reference_open.t190_bed_out_min)} min。</p>`:""}</div>
@@ -452,18 +458,19 @@ function svgLine(series, o){
   let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
   series=series.filter(s=>Array.isArray(s.x)&&Array.isArray(s.y));
   series.forEach(s=>s.x.forEach((x,i)=>{ const y=s.y[i]; if(y==null||x==null||!Number.isFinite(x)||!Number.isFinite(y)) return; xmin=Math.min(xmin,x); xmax=Math.max(xmax,x); ymin=Math.min(ymin,y); ymax=Math.max(ymax,y); }));
+  if(o.xDomain){[xmin,xmax]=o.xDomain;} if(o.yDomain){[ymin,ymax]=o.yDomain;}
   if(!(xmax>xmin)) return "";
   if(o.ymin!=null) ymin=Math.min(ymin,o.ymin); if(ymax-ymin<1e-9){ ymax=ymin+1; } const pad=(ymax-ymin)*0.06; ymin-=pad; ymax+=pad;
   const X=x=>ml+(x-xmin)/(xmax-xmin)*iw, Y=y=>mt+ih-(y-ymin)/(ymax-ymin)*ih;
   const ticks=(a,b,n)=>{ const step=niceStep((b-a)/n); const out=[]; for(let v=Math.ceil(a/step)*step; v<=b+1e-9; v+=step) out.push(+v.toFixed(6)); return out; };
-  let svg=`<svg class="svgchart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+  let svg=`<svg class="svgchart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">${formulaDescription(o)}`;
   svg+=`<text class="ttl" x="${ml}" y="12">${o.title||""}</text>`;
   ticks(ymin,ymax,4).forEach(v=>{ svg+=`<line class="grid" x1="${ml}" x2="${W-mr}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${ml-4}" y="${Y(v)+3}" text-anchor="end">${g(v)}</text>`; });
   ticks(xmin,xmax,5).forEach(v=>{ svg+=`<text x="${X(v)}" y="${H-8}" text-anchor="middle">${g(v)}</text>`; });
   svg+=`<line class="ax" x1="${ml}" x2="${W-mr}" y1="${mt+ih}" y2="${mt+ih}"/><line class="ax" x1="${ml}" x2="${ml}" y1="${mt}" y2="${mt+ih}"/>`;
   svg+=`<text x="${W-mr}" y="${H-8}" text-anchor="end" style="fill:var(--text2)">${o.xlabel||""}</text>`;
-  series.forEach(s=>{ let d="",pen=false; s.x.forEach((x,i)=>{ const y=s.y[i]; if(s.breaks&&s.breaks.has(i)) pen=false; if(y==null||x==null||!Number.isFinite(x)||!Number.isFinite(y)){pen=false;return;} d+=(pen?"L":"M")+X(x).toFixed(1)+" "+Y(y).toFixed(1); pen=true; }); svg+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w||1.6}" ${s.dash?'stroke-dasharray="4 3"':""}/>`; });
-  return svg+"</svg>";
+  series.forEach(s=>{ let d="",pen=false; s.x.forEach((x,i)=>{ const y=s.y[i]; if(s.breaks&&s.breaks.has(i)) pen=false; if(y==null||x==null||!Number.isFinite(x)||!Number.isFinite(y)){pen=false;return;} d+=(pen?"L":"M")+X(x).toFixed(1)+" "+Y(y).toFixed(1); pen=true; }); svg+=`<path ${s.key?`data-probe-key="${esc(s.key)}" `:""}d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w||1.6}" ${s.dash?`stroke-dasharray="${typeof s.dash==="string"?esc(s.dash):"4 3"}"`:""}/>`; });
+  return svg+"</svg>"+(o.formulaPanel===false?"":formulaPanel(o.formulaKey,o.formulaContext));
 }
 function niceStep(raw){ const p=Math.pow(10,Math.floor(Math.log10(raw))); const r=raw/p; return (r<1.5?1:r<3?2:r<7?5:10)*p; }
 function legend(items){ return `<div class="chart-legend">${items.map(i=>`<span><i style="background:${i.color}"></i>${i.label}</span>`).join("")}</div>`; }
@@ -474,8 +481,17 @@ function pcmChartSection(s){
 }
 function renderPcmChart(s){
   const el=$("#pcmMetric"), target=$("#pcmChart"); if(!el||!target) return; const R=researchStage(s), S=R?R.series:s.st.series, x=S.tau_min||[], breaks=new Set((R?.gaps||[]).map(g=>g.before_index));
-  const series=el.value==="summary"?[["pcm_mean_C","测点均值","#1264FF",false],["pcm_min_C","测点最小值","#7FA3FF",true],["pcm_max_C","测点最大值","#B97708",true]]:el.value==="all"?Array.from({length:12},(_,i)=>{const k="pcm_probe_"+String(i+1).padStart(2,"0")+"_C";return [k,esc(probeName(s,k)),PALETTE[i%PALETTE.length],false];}):[[el.value,esc(probeName(s,el.value)),"#1264FF",false]];
-  const available=series.filter(([k])=>hasValues(S[k])); target.innerHTML=legend(available.map(([k,label,color])=>({label,color})))+svgLine(available.map(([k,label,color,dash])=>({x,y:S[k],color,dash,breaks,w:k==="pcm_mean_C"?2:1.4})),{title:"胶囊内部温度 (°C)",xlabel:"min"});
+  const all=el.value==="all",summary=el.value==="summary",ctx=formulaContext(s),formulaKey=summary?"pcm_mean":"pcm_probes";
+  const makeProbe=k=>{const style=probeStyle(k);return [k,probeName(s,k),style.color,style.dash];};
+  const series=summary?[["pcm_mean_C","测点均值","#1264FF",false],["pcm_min_C","测点最小值","#7FA3FF",true],["pcm_max_C","测点最大值","#B97708",true]]:all?Array.from({length:12},(_,i)=>makeProbe("pcm_probe_"+String(i+1).padStart(2,"0")+"_C")):[makeProbe(el.value)];
+  const available=series.filter(([k])=>hasValues(S[k]));
+  if(all){
+    const validX=x.filter(Number.isFinite),validY=available.flatMap(([k])=>S[k].filter(v=>v!=null&&Number.isFinite(v)));
+    const domains={xDomain:[Math.min(...validX),Math.max(...validX)],yDomain:[Math.min(...validY),Math.max(...validY)]};
+    target.innerHTML=`<p class="dim">${available.length}/${series.length} 个内部测点 · 每个测点单独显示 · 共用时间与温度尺度；显示本阶段全部记录。</p><div class="pcm-probe-grid">${series.map(([k,label,color,dash])=>{const vals=(S[k]||[]).filter(v=>v!=null&&Number.isFinite(v)),n=vals.length;return `<section class="pcm-probe-panel" data-probe-key="${esc(k)}"><h5 style="border-left:3px solid ${color};padding-left:8px">${esc(label)}</h5>${n?svgLine([{x,y:S[k],color,dash,breaks,key:k}],{...domains,width:356,height:185,title:"温度 (°C)",xlabel:"min",formulaKey,formulaContext:ctx,formulaPanel:false}):'<p class="dim">此通道无有效温度记录</p>'}<p class="dim">${n} 个报告采样${n?` · ${g(vals[0])} → ${g(vals[n-1])} °C`:""}</p></section>`;}).join("")}</div>${formulaPanel(formulaKey,ctx)}`;
+  }else{
+    target.innerHTML=legend(available.map(([k,label,color])=>({label:esc(label),color})))+svgLine(available.map(([k,label,color,dash])=>({x,y:S[k],color,dash,breaks,key:summary?null:k,w:k==="pcm_mean_C"?2:1.4})),{title:"胶囊内部温度 (°C)",xlabel:"min",formulaKey,formulaContext:ctx});
+  }
   el.onchange=()=>renderPcmChart(s);
 }
 
@@ -488,11 +504,12 @@ function showStageDetail(sid){
   const kv=(pairs)=>`<div class="kv dense">${pairs.filter(([k,v])=>v!==undefined&&v!==null&&v!=="").map(([k,v])=>`<div>${k}</div><div>${v}</div>`).join("")}</div>`;
   const pct=v=>v==null?null:(100*v).toFixed(1)+" %";
   const diag=!isOpen(s)&&(p.solver_version||M.hx_diagnostics_present)?`<div class="sec"><h4>UDF 诊断检查</h4>${kv([["求解器版本",p.solver_version],["几何换算系数",p.geometry_factor],["检查状态 / 稳定样本数",(M.hx_diagnostics_status||"未检查")+" / "+(M.hx_diagnostics_stable_points??0)],["耦合误差最大值",M.hx_coupling_abs_max_K!=null?fmt(M.hx_coupling_abs_max_K,5)+" K":null],["实际入口与目标最大偏差",M.hx_boundary_target_abs_max_K!=null?fmt(M.hx_boundary_target_abs_max_K,5)+" K":null],["流量误差最大值",M.hx_mass_error_abs_max_pct!=null?fmt(M.hx_mass_error_abs_max_pct,3)+" %":null],["能量误差最大值（全段）",M.hx_energy_error_abs_max_pct!=null?fmt(M.hx_energy_error_abs_max_pct,3)+" %":null],["能量误差最大值（稳定段）",M.hx_energy_error_stable_abs_max_pct!=null?fmt(M.hx_energy_error_stable_abs_max_pct,3)+" %":null],["稳定段能量误差 > 0.5% 点数",M.hx_energy_bad_count],["回流比例最大值",M.hx_backflow_max_fraction!=null?fmt(100*M.hx_backflow_max_fraction,4)+" %":null]])}<p class="dim">阶段有效时间超过 8 min 后逐点检查：耦合误差 ≤ 0.05 K、流量与能量误差 ≤ 0.5%、回流比例 ≤ 0.1%；版本、闭环状态和有效标志须一致。统计基于原始采样；HX 检查通过不等于阶段完成或物理模型验收。</p></div>`:"";
-  const temps=svgLine([{x:RS.tau_min,y:RS.bed_in_C,color:"#B97708",w:1.8,breaks},{x:RS.tau_min,y:RS.bed_out_C,color:"#E3A83A",breaks},...(hasValues(RS.t2in_C)?[{x:RS.tau_min,y:RS.t2in_C,color:"#1264FF",dash:true,breaks},{x:RS.tau_min,y:RS.t2out_C,color:"#7FA3FF",breaks}]:[])],{title:"四端温度 (°C)",xlabel:"min"});
+  const ctx=formulaContext(s);
+  const temps=svgLine([{x:RS.tau_min,y:RS.bed_in_C,color:"#B97708",w:1.8,breaks},{x:RS.tau_min,y:RS.bed_out_C,color:"#E3A83A",breaks},...(hasValues(RS.t2in_C)?[{x:RS.tau_min,y:RS.t2in_C,color:"#1264FF",dash:true,breaks},{x:RS.tau_min,y:RS.t2out_C,color:"#7FA3FF",breaks}]:[])],{title:"四端温度 (°C)",xlabel:"min",formulaKey:"boundary_temperature",formulaContext:ctx});
   const power=R?RS.bed_power_W:(S.q_bed_W||[]).map(v=>v==null?null:(s.mode==="discharge"?-v:v));
   const energy=R?RS.bed_energy_MJ:(S.e_bed_MJ||[]).map(v=>v==null?null:(s.mode==="discharge"?-v:v));
-  const qe=svgLine([{x:RS.tau_min,y:power.map(v=>v==null?null:v/1000),color:"#101827",breaks}],{title:(s.mode==="discharge"?"床层放热功率 (kW)":"床层吸热功率 Q_bed (kW)"),xlabel:"min",ymin:0});
-  const ee=svgLine([{x:RS.tau_min,y:energy,color:"#1264FF",w:1.8,breaks},...(!R?[{x:S.tau_min,y:S.e_wall_MJ,color:"#8490A3",dash:true}]:[])],{title:(s.mode==="discharge"?"累计放热":"累计吸热")+(R?" · 有符号记录积分 (MJ)":" 与壁损估计 (MJ)"),xlabel:"min",ymin:0});
+  const qe=svgLine([{x:RS.tau_min,y:power.map(v=>v==null?null:v/1000),color:"#101827",breaks}],{title:(s.mode==="discharge"?"床层放热功率 (kW)":"床层吸热功率 Q_bed (kW)"),xlabel:"min",ymin:0,formulaKey:"heat_power",formulaContext:ctx});
+  const ee=svgLine([{x:RS.tau_min,y:energy,color:"#1264FF",w:1.8,breaks},...(!R?[{x:S.tau_min,y:S.e_wall_MJ,color:"#8490A3",dash:true}]:[])],{title:(s.mode==="discharge"?"累计放热":"累计吸热")+(R?" · 有符号记录积分 (MJ)":" 与壁损估计 (MJ)"),xlabel:"min",ymin:0,formulaKey:R?"heat_energy":"legacy_heat_energy",formulaContext:ctx});
   const notes=qualityNotes(s), q=c.quality||{}, diagnostics=q.diagnostics||{};
   const quality=`<div class="sec"><h4>阶段记录与质量</h4>${kv([["批次",esc(datasetLabel(datasetId(c)))],["工况 / 阶段",esc(c.condition_id||c.case_id)+" / "+phaseLabel(s)],["记录状态",PHASE_STATUS[M.phase_status||q.status]||M.phase_status||q.status||"历史记录"],["UDF 来源",esc(q.udf_source_status||"未单独标注")],["诊断记录",esc(diagnostics.status||"")],["诊断文件",diagnostics.file?esc(diagnostics.file):null]])}${notes.length?`<div class="note"><ul class="list">${notes.map(n=>`<li>${esc(n)}</li>`).join("")}</ul></div>`:""}<p class="dim">有记录表示报告可读取；是否完成充放热、相变是否完成及充放热初始场衔接，仍需结合终点与 checkpoint 证据判断。</p></div>`;
   let metricRows;

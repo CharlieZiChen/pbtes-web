@@ -6,12 +6,13 @@ const finite = v => v !== null && v !== undefined && Number.isFinite(Number(v));
 const fmt = (v, n = 2) => {if(!finite(v))return '—';const s=Number(v).toFixed(n);return n?s.replace(/\.?0+$/, ''):s;};
 const scaled = (v,n) => finite(v)?Number(v)*n:null;
 const colors = ['#1264FF','#B97708','#0C9B70','#7157C9','#D04D63','#079AA8','#637C48','#A56E96','#5A7193','#BD682A'];
+const probeColors = ['#1264FF','#B97708','#0C9B70','#7157C9','#D04D63','#079AA8','#637C48','#A56E96','#344F80','#BD682A','#946200','#246D62'];
 const phaseCN = p => p === 'discharge' ? '放热' : '充热';
 const conditionSort = (a,b) => a === 'OPEN' ? -1 : b === 'OPEN' ? 1 : a.localeCompare(b, undefined, {numeric:true});
 const nice = r => { const p = Math.pow(10, Math.floor(Math.log10(r || 1))); const q = r / p; return (q<1.5?1:q<3?2:q<7?5:10)*p; };
 const ticks = (a,b,n) => { const d=nice((b-a)/n); const out=[]; for(let v=Math.ceil(a/d)*d;v<=b+1e-8;v+=d)out.push(+v.toFixed(8));return out; };
 let data, records=[], originals=[], byRecord={}, conditions=[], mounted=false, serial=0, chartExports=new Map(),viewWindow='',rendering=false;
-const state = {tab:'stages',phase:'charge',selected:new Set(),group:'',axis:'time',window:'common',start:null,end:null,threshold:100,probeRecord:'',probe:'all',pair:'',matrixMetric:'heat',diag:'hx_energy_error_pct'};
+const state = {tab:'stages',phase:'charge',selected:new Set(),group:'',axis:'time',window:'common',start:null,end:null,threshold:100,probeRecord:'',probe:'all',probeWindow:'full',probeLayout:'facets',pair:'',matrixMetric:'heat',diag:'hx_energy_error_pct'};
 const root = () => document.querySelector('#researchRoot');
 function normalize(record) {
   return ((record.research||{}).stages||[]).map((r,i) => {
@@ -122,18 +123,20 @@ function energyDomain(rows,b) {
 const axisAllowed=(rows,b)=>energyDomain(rows,b)!==null;
 function chartLine(r,key,b,opt={}) {
   let points=samples(r,rowBounds(r,b),key).map(p=>p?{x:state.axis==='energy'&&!opt.forceTime?lookup(r,'bed_energy_MJ',p.t):p.t,y:p.y*(opt.scale??1)}:null);
-  return {name:opt.name||label(r),color:opt.color||colorOf(r.condition),points,dash:opt.dash,width:opt.width||1.7};
+  return {name:opt.name||label(r),color:opt.color||colorOf(r.condition),points,dash:opt.dash,width:opt.width||1.7,key:opt.key};
 }
 function download(text,name,type) {
   const a=document.createElement('a'),url=URL.createObjectURL(new Blob([text],{type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-function svgChart(lines,{unit='',xlabel='阶段历时 (min)',bands=[],hline=null}={}) {
+function svgChart(lines,{unit='',xlabel='阶段历时 (min)',bands=[],hline=null,width=720,height=282,xDomain=null,yDomain=null,showLegend=true}={}) {
   lines=lines.filter(l=>(l.points||[]).some(p=>p&&finite(p.x)&&finite(p.y)));
   const pts=lines.flatMap(l=>l.points.filter(p=>p&&finite(p.x)&&finite(p.y)));
   if(!pts.length)return {html:'<div class="r-blank">当前选择没有可读取的数据。</div>',svg:null};
-  const W=720,H=282,L=62,R=20,T=29,B=47,iw=W-L-R,ih=H-T-B,fullH=H+Math.ceil(lines.length/2)*17+8;
+  const W=width,H=height,L=62,R=20,T=29,B=47,iw=W-L-R,ih=H-T-B,fullH=H+(showLegend?Math.ceil(lines.length/2)*17:0)+8;
   const bandY=bands.flatMap(b=>(b.points||[]).flatMap(p=>p?[p.min,p.max].filter(finite):[]));
   let x0=Math.min(...pts.map(p=>p.x)),x1=Math.max(...pts.map(p=>p.x)),y0=Math.min(...pts.map(p=>p.y),...bandY),y1=Math.max(...pts.map(p=>p.y),...bandY);
+  if(xDomain?.every(finite))[x0,x1]=xDomain;
+  if(yDomain?.every(finite))[y0,y1]=yDomain;
   if(x1<=x0)x1=x0+1;if(y1-y0<1e-8){y0-=.5;y1+=.5;}else{const pad=(y1-y0)*.08;y0-=pad;y1+=pad;}
   if(finite(hline)){y0=Math.min(y0,hline);y1=Math.max(y1,hline);}
   const X=x=>L+(x-x0)/(x1-x0)*iw,Y=y=>T+ih-(y-y0)/(y1-y0)*ih;
@@ -148,9 +151,9 @@ function svgChart(lines,{unit='',xlabel='阶段历时 (min)',bands=[],hline=null
   if(finite(hline))s+=`<path d="M${L} ${Y(hline)}H${W-R}" stroke="#b9c7dc" stroke-dasharray="5 4" fill="none"/>`;
   lines.forEach(l=>{
     let d='',pen=false;l.points.forEach(p=>{if(!p||!finite(p.x)||!finite(p.y)){pen=false;return;}d+=(pen?'L':'M')+X(p.x).toFixed(2)+' '+Y(p.y).toFixed(2);pen=true;});
-    s+=`<path d="${d}" fill="none" stroke="${l.color}" stroke-width="${l.width||1.7}" ${l.dash?'stroke-dasharray="5 4"':''} stroke-linejoin="round"/>`;
+    s+=`<path ${l.key?`data-probe-key="${esc(l.key)}"`:''} d="${d}" fill="none" stroke="${l.color}" stroke-width="${l.width||1.7}" ${l.dash?`stroke-dasharray="${typeof l.dash==='string'?l.dash:'5 4'}"`:''} stroke-linejoin="round"/>`;
   });
-  lines.forEach((l,i)=>{const x=L+(i%2)*(iw/2),y=H+10+Math.floor(i/2)*17;s+=`<path d="M${x} ${y-3}h17" stroke="${l.color}" fill="none" stroke-width="2" ${l.dash?'stroke-dasharray="5 4"':''}/><text x="${x+23}" y="${y}" style="font:10px Arial,sans-serif">${esc(l.name)}</text>`;});
+  if(showLegend)lines.forEach((l,i)=>{const x=L+(i%2)*(iw/2),y=H+10+Math.floor(i/2)*17;s+=`<path d="M${x} ${y-3}h17" stroke="${l.color}" fill="none" stroke-width="2" ${l.dash?`stroke-dasharray="${typeof l.dash==='string'?l.dash:'5 4'}"`:''}/><text x="${x+23}" y="${y}" style="font:10px Arial,sans-serif">${esc(l.name)}</text>`;});
   s+='</svg>';
   return {html:s,svg:s};
 }
@@ -159,17 +162,26 @@ function wrappedText(text,width=118) {
   for(const c of String(text)){const w=c.charCodeAt(0)>255?2:1;if(n+w>width){out.push(line);line='';n=0;}line+=c;n+=w;}
   if(line)out.push(line);return out;
 }
-function exportGraphic(svg,title,caption) {
+function exportGraphic(svg,title,caption,options={}) {
   const vb=svg.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/);if(!vb)return svg;
   const W=Number(vb[1]),H=Number(vb[2]),rs=state.tab==='pairs'?[]:selectedRecords();
-  const windowNote=viewWindow||(state.tab==='pairs'?'报告历史关联；原始 flow-time；checkpoint 未核验':bounds(rs).label);
-  const notes=wrappedText(windowNote+'。'+caption,Math.floor(W/6));
-  const metadata={dataset:'retest-2026-10',view:state.tab,phase:state.tab==='pairs'?'charge/discharge':state.phase,conditions:state.tab==='pairs'?[state.pair]:[...state.selected],threshold_C:state.threshold,axis:state.tab==='pairs'?'flow_time':state.axis,window:windowNote,checkpoint_verified:false};
+  const windowNote=options.window||viewWindow||(state.tab==='pairs'?'报告历史关联；原始 flow-time；checkpoint 未核验':bounds(rs).label);
+  const formula=window.PBTES_FORMULAS?.text(options.formulaKey,options.formulaContext)||'';
+  const notes=wrappedText(windowNote+'。'+caption+(formula?' 计算公式：'+formula:''),Math.floor(W/6));
+  const metadata={dataset:'retest-2026-10',view:state.tab,phase:state.tab==='pairs'?'charge/discharge':state.phase,conditions:state.tab==='pairs'?[state.pair]:[...state.selected],threshold_C:state.threshold,axis:state.tab==='pairs'?'flow_time':state.axis,window:windowNote,checkpoint_verified:false,...options,formula};
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H+47+notes.length*14}" role="img"><title>${esc(title)}</title><desc>${esc(caption)}</desc><metadata>${esc(JSON.stringify(metadata))}</metadata><rect width="${W}" height="${H+47+notes.length*14}" fill="white"/><text x="20" y="23" style="font:600 14px Arial,sans-serif;fill:#101827">${esc(title)}</text><g transform="translate(0 32)">${svg.slice(svg.indexOf('>')+1,svg.lastIndexOf('</svg>'))}</g>${notes.map((line,i)=>`<text x="20" y="${H+49+i*14}" style="font:9px Arial,sans-serif;fill:#56657B">${esc(line)}</text>`).join('')}</svg>`;
 }
-function card(title,body,caption='',wide=false,svg=null) {
-  const id='r-chart-'+(++serial);if(svg)chartExports.set(id,{title,svg:exportGraphic(svg,title,caption)});
-  return `<article class="r-card${wide?' wide':''}"><div class="r-card-head"><h2>${esc(title)}</h2>${svg?`<button data-svg="${id}" title="下载矢量图">↓ SVG</button>`:''}</div>${body}${caption?`<p class="r-caption">${esc(caption)}</p>`:''}</article>`;
+function card(title,body,caption='',wide=false,svg=null,options={}) {
+  const number=Number(title.match(/^\d+/)?.[0]);
+  const keys=state.tab==='pairs'?['','pcm_mean','boundary_temperature','heat_power','heat_energy']:['','pcm_mean','pcm_dispersion','boundary_temperature','heat_power','heat_energy','exergy_energy','window_summary',state.phase==='charge'?'response_time':'useful_delivery','pcm_probes','probe_heatmap','hx_diagnostics'];
+  const formulaKey=options.formulaKey||keys[number];
+  const pair=(data.pairs||[]).find(p=>p.condition_id===state.pair);
+  const formulaRecords=state.tab==='pairs'&&pair?[resolvePairRecord(pair,'charge'),resolvePairRecord(pair,'discharge')].filter(Boolean):selectedRecords();
+  const loops=new Set(formulaRecords.map(r=>r.loop));
+  const formulaContext={phase:state.tab==='pairs'?'cycle':state.phase,loop:loops.size===1?[...loops][0]:'mixed',axis:state.tab==='pairs'?'time':state.axis,diag:state.diag,threshold:state.threshold,...options.formulaContext};
+  const exportOptions={...options,formulaKey,formulaContext};
+  const id='r-chart-'+(++serial);if(svg)chartExports.set(id,{title,svg:exportGraphic(svg,title,caption,exportOptions)});
+  return `<article class="r-card${wide?' wide':''}"><div class="r-card-head"><h2>${esc(title)}</h2>${svg?`<button data-svg="${id}" title="下载矢量图">↓ SVG</button>`:''}</div>${body}${caption?`<p class="r-caption">${esc(caption)}</p>`:''}${formulaKey?window.PBTES_FORMULAS?.render(formulaKey,formulaContext)||'':''}</article>`;
 }
 const axisLabel = () => state.axis==='energy'?'床层累计吸热量 (MJ)':'阶段历时 (min)';
 function plotCard(title,lines,unit,caption='',opt={}) {const c=svgChart(lines,{unit,xlabel:opt.xlabel||axisLabel(),...opt});return card(title,c.html,caption,opt.wide,c.svg);}
@@ -179,6 +191,42 @@ function comparisonLabel(c) {
   if(c.label||c.title)return c.label||c.title;
   const id=c.cmp_id||'',m=id.match(/__(ua\d+|m\d+)_/);
   return `${phaseCN(c.phase||c.mode)} · ${c.type==='open_closed'?'开环与闭环':m?.[1].startsWith('ua')?'固定 UA='+m[1].slice(2)+' W/K · 流量变化':m?'固定 ṁ₂='+m[1].slice(1)+' kg/h · UA 变化':c.type_cn||id}`;
+}
+const probeKeysOf=r=>Object.keys(r.s).filter(k=>/^pcm_probe_\d+_C$/.test(k)).sort();
+function probeStyle(key) {
+  const i=Math.max(0,Number(key.match(/\d+/)?.[0]||1)-1);
+  return {key,color:probeColors[i%probeColors.length],dash:i>=8?'7 3':null};
+}
+function probeBounds(r,b) {return rowBounds(r,state.probeWindow==='full'?bounds([r],true):b);}
+function probeWindowLabel(r,b) {
+  return `${label(r)} · ${phaseCN(r.phase)} · ${state.probeWindow==='full'?'全部原始记录':'跟随比较窗口'} · ${fmt(b.start)}–${fmt(b.end)} min${b.energy?` · ${fmt(b.energy.start)}–${fmt(b.energy.end)} MJ`:''}`;
+}
+function probeViewer(r,rows,b,keys) {
+  if(state.probe!=='all'&&!keys.includes(state.probe))state.probe='all';
+  const chosen=state.probe==='all'?keys:[state.probe],pb=probeBounds(r,b),full=state.probeWindow==='full';
+  const lines=chosen.map(k=>chartLine(r,k,pb,{...probeStyle(k),name:r.labels[k]||k,forceTime:full}));
+  const pts=lines.flatMap(l=>l.points.filter(p=>p&&finite(p.x)&&finite(p.y)));
+  const chartOptions={unit:'温度 (°C)',xlabel:full?'阶段历时 (min)':axisLabel()};
+  const scope=probeWindowLabel(r,pb),n=values(r,'tau_min').filter(t=>t>=pb.start-1e-8&&t<=pb.end+1e-8).length;
+  let body='',exportSVG=null;
+  if(state.probeLayout==='facets'&&pts.length) {
+    const xDomain=[Math.min(...pts.map(p=>p.x)),Math.max(...pts.map(p=>p.x))],yDomain=[Math.min(...pts.map(p=>p.y)),Math.max(...pts.map(p=>p.y))];
+    const tiles=lines.map(l=>({line:l,chart:svgChart([l],{...chartOptions,width:460,height:230,showLegend:false,xDomain,yDomain})}));
+    body='<div class="r-probe-grid">'+tiles.map(({line:l,chart:c})=>`<section class="r-probe-panel" data-probe-key="${esc(l.key)}"><h3><i style="background:${l.color}"></i>${esc(l.name)}</h3>${c.html}<p>${n} 个原始采样 · ${fmt(l.points.find(Boolean)?.y)} → ${fmt(l.points.filter(Boolean).at(-1)?.y)} °C</p></section>`).join('')+'</div>';
+    const cols=Math.min(3,tiles.length),rowHeight=280,ew=cols*460,eh=Math.ceil(tiles.length/cols)*rowHeight;
+    exportSVG=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ew} ${eh}"><rect width="${ew}" height="${eh}" fill="white"/>`+tiles.map(({line:l,chart:c},i)=>`<g transform="translate(${i%cols*460} ${Math.floor(i/cols)*rowHeight})"><text x="15" y="20" style="font:600 12px Arial;fill:${l.color}">${esc(l.name)}</text><g transform="translate(0 28)">${c.svg?c.svg.slice(c.svg.indexOf('>')+1,c.svg.lastIndexOf('</svg>')):''}</g></g>`).join('')+'</svg>';
+  }else{
+    const c=svgChart(lines,chartOptions);body=c.html;exportSVG=c.svg;
+  }
+  const controls=`<div class="r-filters r-probe-tools"><label>工况<select id="r-probe-record">${rows.map(v=>`<option value="${esc(v.id)}" ${v.id===r.id?'selected':''}>${esc(label(v))}</option>`).join('')}</select></label><label>测点<select id="r-probe"><option value="all">全部测点 · ${keys.length} 个</option>${keys.map(k=>`<option value="${esc(k)}" ${state.probe===k?'selected':''}>${esc(r.labels[k]||k)}</option>`).join('')}</select></label><label>查看范围<select id="r-probe-window"><option value="full" ${full?'selected':''}>本工况全部记录 · 时间轴</option><option value="compare" ${!full?'selected':''}>跟随上方比较窗口与横轴</option></select></label><div class="r-probe-layout" role="group" aria-label="测点图布局">${[['facets','独立小图'],['overlay','叠加曲线']].map(([id,name])=>`<button data-probe-layout="${id}" aria-pressed="${state.probeLayout===id}" class="${state.probeLayout===id?'on':''}">${name}</button>`).join('')}</div><button class="btn" id="r-probe-csv">↓ 全部原始测点 CSV</button></div>`;
+  return card('09 · 原始 PCM 测点',controls+`<p id="r-probe-summary" class="r-probe-summary">${chosen.length}/${keys.length} 测点 · ${n} 个原始报告采样 · ${esc(scope)}${state.probeLayout==='facets'?' · 各小图共用横纵轴范围':''}</p><div id="r-probe-viewer">${body}</div>`,'保留报告原始 surface 名及全部采样，不按绘图尺寸降采样。测点序号不代表空间位置。缺步处断线；比较窗口边缘仅作线性截取。CSV 始终导出所选测点的全部原始记录。',true,exportSVG,{window:scope,conditions:[r.condition],axis:full?'time':state.axis,probe_window:state.probeWindow,probe_keys:chosen,formulaContext:{phase:r.phase,loop:r.loop,axis:full?'time':state.axis}});
+}
+function exportProbeCSV() {
+  const rows=selectedRecords(),r=rows.find(v=>v.id===state.probeRecord)||rows[0];if(!r)return;
+  const keys=state.probe==='all'?probeKeysOf(r):[state.probe];
+  const csvRows=[['dataset','condition','stage_id','phase','step','flow_time_min','tau_min','gap_before',...keys.map(k=>`${k} | ${r.labels[k]||k} (°C)`)]];
+  values(r,'tau_min').forEach((t,i)=>csvRows.push(['retest-2026-10',r.condition,r.id,r.phase,values(r,'step')[i],values(r,'flow_time_min')[i],t,i>0&&broken(r,i-1)?1:0,...keys.map(k=>values(r,k)[i]??'')]));
+  download('\uFEFF'+csvRows.map(row=>row.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\r\n'),`PBTES_${r.condition}_${r.phase}_full_probes.csv`,'text/csv;charset=utf-8');
 }
 function renderToolbar() {
   const comparisons=data.comparisons||[];
@@ -221,13 +269,10 @@ function renderStages() {
     html+=card('08 · 温度响应时刻',rr.length?table(['工况','阈值 °C','测点均值 min','所有测点 min','床层出口 min'],rr):'<div class="r-blank">当前阶段没有预计算的响应时刻。</div>','响应时刻依据阶段原始有效记录，不代表相变完成；“所有测点”仅指现有测点，不等同于全域。',true);
   }
   const active=rows.find(r=>r.id===state.probeRecord)||rows[0];state.probeRecord=active.id;
-  const probeKeys=Object.keys(active.s).filter(k=>/^pcm_probe_\d+_C$/.test(k));
-  if(state.probe!=='all'&&!probeKeys.includes(state.probe))state.probe='all';
-  const probeLines=(state.probe==='all'?probeKeys:[state.probe]).map((k,i)=>chartLine(active,k,b,{name:active.labels[k]||k,color:colors[i%colors.length]}));
-  const pchart=svgChart(probeLines,{unit:'温度 (°C)',xlabel:axisLabel()});
-  html+=card('09 · 原始 PCM 测点',`<div class="r-filters"><label>工况<select id="r-probe-record">${rows.map(r=>`<option value="${esc(r.id)}" ${r.id===active.id?'selected':''}>${esc(label(r))}</option>`).join('')}</select></label><label>测点<select id="r-probe"><option value="all">全部测点</option>${probeKeys.map(k=>`<option value="${esc(k)}" ${state.probe===k?'selected':''}>${esc(active.labels[k]||k)}</option>`).join('')}</select></label></div>${pchart.html}`,'保持报告原始 surface 名；下标及文件列序不等同于空间位置。',true,pchart.svg);
-  html+=heatmapCard(active,rowBounds(active,b),probeKeys);
-  const diagNames={hx_energy_error_pct:'耦合能量误差 (%)',hx_mass_error_pct:'质量流量误差 (%)',hx_backflow_fraction:'回流面积比例 (0–1)',hx_coupling_error:'入口耦合温差 (K)',hx_eps:'换热器效能 ε',hx_q12:'换热量 (W)',hx_Q12:'换热量 (W)',hx_valid:'UDF 有效标志'};
+  const probeKeys=probeKeysOf(active);
+  html+=probeViewer(active,rows,b,probeKeys);
+  html+=heatmapCard(active,probeBounds(active,b),probeKeys);
+  const diagNames={hx_energy_error_pct:'耦合能量误差 (%)',hx_mass_error_pct:'质量流量误差 (%)',hx_backflow_fraction:'逆向质量通量比例 (0–1)',hx_coupling_error:'入口耦合温差 (K)',hx_eps:'换热器效能 ε',hx_q12:'换热量 (W)',hx_Q12:'换热量 (W)',hx_valid:'UDF 有效标志'};
   const diagOpt=Object.entries(diagNames).filter(([key])=>rows.some(r=>values(r,key).some(finite)));
   if(!diagOpt.some(([k])=>k===state.diag))state.diag=diagOpt[0]?.[0]||'hx_energy_error_pct';
   const dc=svgChart(rows.filter(r=>r.loop!=='open').map(r=>chartLine(r,state.diag,b)),{unit:diagNames[state.diag]||state.diag,xlabel:axisLabel()});
@@ -247,7 +292,7 @@ function heatmapCard(r,b,keys) {
   });
   ticks(t0,t1,8).forEach(t=>svg+=`<text x="${L+(t-t0)/(t1-t0)*iw}" y="${H-30}" text-anchor="middle" style="font:11px Arial;fill:#56657B">${fmt(t)}</text>`);
   svg+=`<text x="${L+iw/2}" y="${H-8}" text-anchor="middle" style="font:12px Arial;fill:#101827">阶段历时 (min)</text><defs><linearGradient id="r-heat-${serial}" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="${shade(lo)}"/><stop offset=".5" stop-color="${shade((lo+hi)/2)}"/><stop offset="1" stop-color="${shade(hi)}"/></linearGradient></defs><rect x="${W-43}" y="${T}" width="12" height="${ih}" fill="url(#r-heat-${serial})"/><text x="${W-4}" y="${T+8}" text-anchor="end" style="font:10px Arial">${fmt(hi,0)}</text><text x="${W-4}" y="${T+ih}" text-anchor="end" style="font:10px Arial">${fmt(lo,0)}</text><text x="${W-27}" y="${T-9}" text-anchor="middle" style="font:11px Arial">°C</text></svg>`;
-  return card('10 · 测点编号—时间热图',svg,`${label(r)}；纵轴为报告通道排列，不是高度或坐标，不是真实温度云图。缺步区间留白；每个色块对应一个已记录采样区间。横轴固定为时间。`,true,svg);
+  return card('10 · 测点编号—时间热图',svg,`${label(r)}；纵轴为报告通道排列，不是高度或坐标，不是真实温度云图。缺步区间留白；每个色块对应一个已记录采样区间。横轴固定为时间。`,true,svg,{window:probeWindowLabel(r,b),conditions:[r.condition],axis:'time',formulaContext:{phase:r.phase,loop:r.loop,axis:'time'}});
 }
 function resolvePairRecord(pair,phase) {
   return byRecord[pair[phase+'_record_id']]||records.find(r=>r.id===pair[phase+'_stage_id'])||null;
@@ -279,7 +324,7 @@ function renderMatrix() {
   const vals=rows.map(val).filter(finite),v0=Math.min(...vals),v1=Math.max(...vals);
   html+='<div class="r-matrix"><div></div>'+[20,40,100].map(m=>`<div class="r-matrix-label">ṁ₂ ${m} kg/h</div>`).join('');
   [50,100,1000].forEach(ua=>{html+=`<div class="r-matrix-label">UA ${ua}<br>W/K</div>`;[20,40,100].forEach(m=>{const id=`UA${ua}_M${m}`,r=rows.find(r=>r.condition===id),v=val(r),f=finite(v)?(v-v0)/(v1-v0||1):0;html+=`<div class="r-matrix-cell ${r?'':'missing'}" ${finite(v)?`style="background:rgba(18,100,255,${.025+f*.18})"`:''}><button data-r-jump="${id}">${id}</button><strong>${fmt(v)} <small>${opts[state.matrixMetric][1]}</small></strong><small>${r?esc((r.record.quality||{}).completion_status||'完成状态未核验'):'放热报告缺失'}</small></div>`;});});
-  html+='</div><div class="r-matrix-key"><span>较小</span><i></i><span>较大</span></div><p class="r-caption">时长指标为全记录跨度，其余热量及平均功率按上方窗口计算；阈值交付热量只适用于放热。缺失值不插值。</p></div>';
+  html+='</div><div class="r-matrix-key"><span>较小</span><i></i><span>较大</span></div><p class="r-caption">时长指标为全记录跨度，其余热量及平均功率按上方窗口计算；阈值交付热量只适用于放热。缺失值不插值。</p>'+(window.PBTES_FORMULAS?.render('matrix_metric',{phase:state.phase,matrixMetric:state.matrixMetric,threshold:state.threshold,loop:'closed'})||'')+'</div>';
   return html;
 }
 function assumptions() {
@@ -304,6 +349,9 @@ function bind() {
   on('#r-window',v=>{const b=bounds(state.tab==='matrix'?originals.filter(r=>r.phase===state.phase&&r.loop!=='open'):selectedRecords());state.window=v;if(v==='custom'){if(!finite(state.start))state.start=b.start;if(!finite(state.end))state.end=b.end;}});on('#r-start',v=>state.start=Number(v));on('#r-end',v=>state.end=Number(v));
   on('#r-axis',v=>state.axis=v);on('#r-threshold',v=>{if(finite(v)&&Number(v)>=20&&Number(v)<=250)state.threshold=Number(v);});
   on('#r-pair',v=>state.pair=v);on('#r-probe-record',v=>state.probeRecord=v);on('#r-probe',v=>state.probe=v);on('#r-diag',v=>state.diag=v);on('#r-matrix-metric',v=>state.matrixMetric=v);
+  on('#r-probe-window',v=>state.probeWindow=v);
+  root().querySelectorAll('[data-probe-layout]').forEach(e=>e.onclick=()=>{state.probeLayout=e.dataset.probeLayout;render();});
+  if(q('#r-probe-csv'))q('#r-probe-csv').onclick=exportProbeCSV;
   on('#r-group',v=>{state.group=v;if(v!=='')applyComparison(Number(v));});
   const all=q('#r-all'),none=q('#r-none');if(all)all.onclick=()=>{state.selected=new Set(conditions);state.group='';render();};if(none)none.onclick=()=>{state.selected.clear();state.group='';render();};
   root().querySelectorAll('[data-r-jump]').forEach(e=>e.onclick=()=>{state.selected=new Set([e.dataset.rJump]);state.tab='stages';render();});

@@ -44,6 +44,18 @@
 .r-legend i{width:15px;height:3px;display:inline-block;flex:none}
 .r-chart{width:100%;height:auto;display:block;font-family:var(--sans)}
 .r-chart text{font-size:10px;fill:#56657B}.r-chart .r-axis-label{font-size:10px;fill:#101827}
+.r-probe-tools{padding:8px 0 12px;border-bottom:1px solid var(--line)}
+.r-probe-tools select{max-width:285px}
+.r-probe-layout{display:flex;gap:3px;border:1px solid var(--line);padding:3px;border-radius:8px}
+.r-probe-layout button{padding:6px 9px;border-radius:5px;font:11px var(--sans);color:var(--text2)}
+.r-probe-layout button.on{background:var(--brand-tint);color:var(--brand);font-weight:600}
+.r-card .r-probe-summary{margin:12px 0;font-size:11px;color:var(--text2)}
+.r-probe-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.r-probe-panel{min-width:0;border:1px solid var(--line);border-radius:9px;padding:11px 8px 7px;background:#fff}
+.r-probe-panel h3{font:600 11px var(--mono);margin:0 6px 8px;overflow-wrap:anywhere;line-height:1.55}
+.r-probe-panel h3 i{display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%}
+.r-probe-panel p{font:10px var(--mono);margin:2px 6px;color:var(--muted)}
+.r-probe-panel .r-chart text{font-size:11px}
 .r-table-wrap{overflow:auto;max-height:420px}
 .r-table{border-collapse:collapse;width:100%;font-size:11.5px;white-space:nowrap}
 .r-table th{text-align:left;color:var(--text2);font-weight:500;background:var(--soft);position:sticky;top:0}
@@ -66,4 +78,6 @@
 .r-assumptions{font-size:11px;color:var(--text2);line-height:1.65;margin-top:18px}.r-assumptions summary{cursor:pointer}.r-assumptions ul{padding-left:19px}
 @media(min-width:1600px){.r-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:1000px){.research{padding:18px 16px 35px}.r-grid{grid-template-columns:1fr}.r-summary{grid-template-columns:repeat(2,1fr)}.r-heading{flex-wrap:wrap}.r-matrix-cell{padding:10px}.r-matrix-cell strong{font-size:16px}.r-export-all{margin-left:0}}
+@media(max-width:1200px){.r-probe-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.r-probe-grid{grid-template-columns:1fr}.r-probe-tools select{max-width:min(275px,65vw)}}
 @media(max-width:600px){.r-summary{grid-template-columns:1fr 1fr}.r-filters{gap:9px}.r-card{padding:13px}.r-matrix{grid-template-columns:44px repeat(3,minmax(0,1fr));gap:4px}.r-matrix-cell{min-height:110px;padding:8px}.r-matrix-cell strong{font-size:14px}}
