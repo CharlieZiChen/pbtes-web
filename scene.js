@@ -127,7 +127,7 @@ window.createScene = function createScene(opts){
     {id:"secondary", pos:new THREE.Vector3(HX.cx+0.3,1.62,0), cls:(m)=>m==="charge"?"hot":"cold", t:(m)=>m==="charge"?"T₂,in · 热源":"T₂,in · 冷源", v:(s)=>fmt(s.T2in)+" °C", hideIfNoT2:true},
     {id:"secondary", pos:new THREE.Vector3(HX.cx-0.3,-0.26,0), cls:(m)=>m==="charge"?"hot":"cool", t:(m)=>m==="charge"?"T₂,out · 回热源":"T₂,out · 交付", v:(s)=>fmt(s.T2out)+" °C", below:true, hideIfNoT2:true},
     {id:"wall", pos:new THREE.Vector3(TANK.x+TANK.R+0.22,0.42,0.1), cls:()=>"gray", t:()=>"壁面散热", v:()=>"k ≈ 0.23 W/K → 20 °C", small:true, below:true},
-    {id:"udf", pos:new THREE.Vector3(HX.cx,HX.cy-HX.r-0.02,0.2), cls:()=>"purple", t:()=>"UDF · DEFINE_ADJUST", v:()=>"LMTD-Newton → ε–NTU（待办）", small:true, below:true},
+    {id:"udf", pos:new THREE.Vector3(HX.cx,HX.cy-HX.r-0.02,0.2), cls:()=>"purple", t:()=>"UDF · DEFINE_ADJUST", v:()=>"ε–NTU 闭式解 · v20260923", small:true, below:true},
   ];
   anchors.forEach(a=>{ const el=document.createElement("div"); el.className="chip"+(a.small?" small":""); el.innerHTML='<span class="bar"></span><span class="t"></span><span class="v"></span>'; el.onclick=()=>onPick(a.id); labelsEl.appendChild(el); a.el=el; });
   const _v=new THREE.Vector3();

@@ -44,7 +44,7 @@ const INFO = {
     eyebrow:"BOUNDARY · ZONE 9", title:"底部边界 zone 9", en:"Boundary id 9 · pressure-outlet (charge) / velocity-inlet (discharge)",
     body: (m)=>`
       <div class="sec"><h4>简介</h4><p>储热罐底部边界。充热时为<b>床层出口</b>（pressure-outlet）；放热时改为 velocity-inlet，成为<b>床层入口</b>，接收换热器冷却后的空气。</p></div>
-      <div class="sec"><h4>在模型中的功能</h4><p>${m==='charge' ? '床层吸热后的空气从此流出，UDF 读取其质量加权平均温度送入换热器。' : '接收换热器一次侧出口（≈ 60 °C）的空气；理想换热器时被钉在 T₂,in + 0.05 K = 60.05 °C。'}</p></div>
+      <div class="sec"><h4>在模型中的功能</h4><p>${m==='charge' ? '床层吸热后的空气从此流出，UDF 读取其质量加权平均温度送入换热器。' : '接收换热器一次侧出口空气；实际入口温度由 ε–NTU 耦合计算，随床层出口和二次侧参数变化，见当前报告。'}</p></div>
       <div class="sec"><h4>数据</h4><p>报告列 <span class="mono">t_out_domain</span> 始终指 zone 9；首行 t = 0 为无效初始化记录需删除；温度原始单位 K。</p></div>`
   },
   loop: {
@@ -53,21 +53,21 @@ const INFO = {
       <div class="sec"><h4>简介</h4><p>空气在床层与 UDF 换热器之间闭式循环。质量流量 40 kg/h = 0.01111 kg/s，热容流率 W₁ = 11.19 W/K。不存在向环境的排气——这是闭环相对开环的核心差别。</p></div>
       <div class="sec"><h4>在模型中的功能</h4><p>把床层出口状态经换热器反馈到床层入口，使入口温度成为动态边界而非人为固定值。管路与风机不建模，忽略管路热损与压降。</p></div>
       <div class="sec"><h4>公式</h4>
-      ${F(`W<sub>1</sub> = ṁ<sub>1</sub> c<sub>p</sub> = 11.19 W/K<br>T<sub>in</sub><sup>n+1</sup> = 0.2 · T<sub>calc</sub> + 0.8 · T<sub>in</sub><sup>n</sup><br><span class="c">入口温度亚松弛；DEFINE_ADJUST 逐迭代执行，一个时间步内即收敛（0.8³⁰ ≈ 0.001）</span>`)}</div>
-      <div class="sec"><h4>备注</h4><div class="note blue">开环基准：入口恒 200 °C、出口直排。240 min 内开环吸热 3.976 MJ，外部热源㶲 5.94 MJ，其中约 4.6 MJ 随尾气排放（η_b 22.5 %）。</div></div>`
+      ${F(`W<sub>1</sub> = ṁ<sub>1</sub> c<sub>p</sub> = 11.19 W/K<br>T<sub>in</sub><sup>n+1</sup> = 0.2 · T<sub>calc</sub> + 0.8 · T<sub>in</sub><sup>n</sup><br><span class="c">DEFINE_ADJUST 逐迭代亚松弛；是否收敛由实际入口与 HX 目标偏差判断，不能仅由迭代次数保证</span>`)}</div>
+      <div class="sec"><h4>历史分析示例</h4><div class="note blue">原批次开环基准：入口恒 200 °C、出口直排。240 min 内开环吸热 3.976 MJ，外部热源㶲 5.94 MJ，其中约 4.6 MJ 随尾气排放（η_b 22.5 %）。这些固定数值不代表 2026-10 重测结果；当前数值见数据详情。</div></div>`
   },
   hx: {
-    eyebrow:"UDF · HX-2", title:"外置逆流换热器（UDF）", en:"Counter-flow heat exchanger · lumped LMTD model in DEFINE_ADJUST",
+    eyebrow:"UDF · HX-2", title:"外置逆流换热器（UDF）", en:"Counter-flow heat exchanger · epsilon-NTU model in DEFINE_ADJUST",
     body: (m)=>`
       <div class="sec"><h4>简介</h4><p>集总参数逆流换热器，参数为传热能力 UA、二次侧流量 ṁ₂ 与二次侧入口温度 T₂,in。一次侧入口 = 床层出口，一次侧出口 = 床层入口。它是系统的<b>第二级换热器</b>。</p></div>
       <div class="sec"><h4>在模型中的功能</h4><p>每个时间步（每次迭代）根据床层出口温度解出一次侧出口温度，决定回到床层的空气有多热/多冷，从而决定床层的驱动温差与充放热速率。</p></div>
       <div class="sec"><h4>公式</h4>
       ${F(`Q<sub>HX</sub> = W<sub>1</sub>(T<sub>1,in</sub> − T<sub>1,out</sub>) = W<sub>2</sub>(T<sub>2,out</sub> − T<sub>2,in</sub>) = UA · ΔT<sub>LMTD</sub><br>ΔT<sub>LMTD</sub> = (ΔT<sub>1</sub> − ΔT<sub>2</sub>) / ln(ΔT<sub>1</sub>/ΔT<sub>2</sub>)<br><span class="c">能量平衡 + 传热方程（当前 UDF 的求解目标）</span>`)}
-      ${F(`ε = [1 − e<sup>−NTU(1−C<sub>r</sub>)</sup>] / [1 − C<sub>r</sub> e<sup>−NTU(1−C<sub>r</sub>)</sup>],&nbsp; NTU = UA / C<sub>min</sub>,&nbsp; C<sub>r</sub> = C<sub>min</sub>/C<sub>max</sub><br>Q = ε C<sub>min</sub> (T<sub>1,in</sub> − T<sub>2,in</sub>)<br><span class="c">ε–NTU 闭式解：同一模型的解析解，拟替换 Newton 迭代</span>`)}
+      ${F(`ε = [1 − e<sup>−NTU(1−C<sub>r</sub>)</sup>] / [1 − C<sub>r</sub> e<sup>−NTU(1−C<sub>r</sub>)</sup>],&nbsp; NTU = UA / C<sub>min</sub>,&nbsp; C<sub>r</sub> = C<sub>min</sub>/C<sub>max</sub><br>C<sub>r</sub>=1时：ε=NTU/(1+NTU)<br>Q = ε C<sub>min</sub> (T<sub>1,in</sub> − T<sub>2,in</sub>)<br><span class="c">ε–NTU 闭式解：20260923版使用的同一逆流模型解析解</span>`)}
       ${F(`UA<sub>eff</sub> = Q<sub>HX</sub> / ΔT<sub>LMTD</sub><br><span class="c">用输出端温度反算，检验输入 UA 是否真正实现（两端温差 > 0.2 K、LMTD > 0.5 K 时可辨识）</span>`)}</div>
       <div class="sec"><h4>工况矩阵</h4><span class="tag b">UA 50 / 100 / 1000 W/K</span><span class="tag b">ṁ₂ 20 / 40 / 100 kg/h</span><span class="tag a">充热 T₂,in 200 °C</span><span class="tag a">放热 T₂,in 60 °C</span>
-      <p class="dim" style="margin-top:6px">${m==='charge' ? '当前：UA = 100 W/K，ṁ₂ = 40 kg/h（W₂ = W₁），效能理论 0.899，实测 UA_eff 100.0 W/K。' : '当前：UA = 1000 W/K，ṁ₂ = 100 kg/h（C_r = 0.4），效能 0.998，一次侧出口被限幅在 T₂,in + 0.05 K。'}</p></div>
-      <div class="sec"><h4>已知问题（待办）</h4><div class="note">Newton 迭代在 W₂ ≠ W₁ 时常在两点间二周期振荡（如 hx50 mdot100 放热：60.05 ↔ 99.9 °C），50 次后返回非收敛值。充热矩阵 9 组中 4 组失效，hx1000 mdot100 靠限幅碰对。修复方案：用 ε–NTU 闭式解替换迭代，见《待办_UDF换热器求解器修复.md》。</div></div>`
+      <p class="dim" style="margin-top:6px">${m==='charge' ? '历史基准示例：UA = 100 W/K，ṁ₂ = 40 kg/h（W₂ = W₁），效能理论 0.899，实测 UA_eff 100.0 W/K。' : '历史放热示例：UA = 1000 W/K，ṁ₂ = 100 kg/h；旧算法的一次侧出口曾被限幅在 T₂,in + 0.05 K，新版已取消此限幅。'}</p></div>
+      <div class="sec"><h4>求解器版本与历史数据</h4><div class="note">旧 Newton 求解器在热容率不等时可能振荡或返回超出换热上限的温度；高 UA 的 0.05 K 限幅也不等于严格收敛。20260923 版已改用 ε–NTU 闭式解，并记录版本、实际入口偏差、流量与回流诊断。旧数据仍按原始结果保留；新的九组工况需通过 Fluent 实机验收后用于验证结论。</div></div>`
   },
   secondary: {
     eyebrow:"SECONDARY SIDE", title: "二次侧热源 / 冷源", en:"External source (200 °C) or sink (60 °C) · ṁ₂",
@@ -75,9 +75,9 @@ const INFO = {
       <div class="sec"><h4>简介</h4><p>${m==='charge' ? '充热时二次侧为 200 °C 恒温热源，在换热器中放热后以 T₂,out 离开，按论文口径视为回热源再加热而非排放。' : '放热时二次侧为 60 °C 恒温冷源，在换热器中被加热到 T₂,out，这股温升就是系统交付出去的产品热。'}</p></div>
       <div class="sec"><h4>在模型中的功能</h4><p>T₂,in 为 UDF 常量；T₂,out 由能量平衡算出并写入 <span class="mono">report-t2-out</span>。二次侧流量决定热容比，进而决定交付/供热温度。</p></div>
       <div class="sec"><h4>公式</h4>
-      ${F(`T<sub>2,out</sub> = T<sub>2,in</sub> + Q<sub>HX</sub> / W<sub>2</sub>,&nbsp; W<sub>2</sub> = ṁ<sub>2</sub> c<sub>p</sub><br>${m==='charge' ? '' : 'T<sub>2,out</sub> − 60 = C<sub>r</sub> (T<sub>bed,out</sub> − T<sub>bed,in</sub>),&nbsp; C<sub>r</sub> = W<sub>1</sub>/W<sub>2</sub> = 0.4 → 最高 81 °C<br>'}<span class="c">热容比越大（ṁ₂ 越大），二次侧温度变化越小</span>`)}
+      ${F(`T<sub>2,out</sub> = T<sub>2,in</sub> + Q<sub>HX</sub> / W<sub>2</sub>,&nbsp; W<sub>2</sub> = ṁ<sub>2</sub> c<sub>p</sub><br>${m==='charge' ? '' : 'T<sub>2,out</sub> − 60 = (W<sub>1</sub>/W<sub>2</sub>)(T<sub>bed,out</sub> − T<sub>bed,in</sub>)<br>'}<span class="c">在同一换热量下，二次侧热容率越大，其温度变化越小；W₁/W₂并不总等于标准Cᵣ</span>`)}
       ${F(`e<sub>f</sub>(T) = c<sub>p</sub>[(T − T<sub>0</sub>) − T<sub>0</sub> ln(T/T<sub>0</sub>)],&nbsp; T<sub>0</sub> = 298.15 K<br>${m==='charge' ? 'E<sub>src</sub> = ∫ ṁ<sub>2</sub>[e<sub>f</sub>(T<sub>2,in</sub>) − e<sub>f</sub>(T<sub>2,out</sub>)] dt,&nbsp; η<sub>b</sub> = E<sub>gain</sub>/E<sub>src</sub>' : 'E<sub>del</sub> = ∫ ṁ<sub>2</sub>[e<sub>f</sub>(T<sub>2,out</sub>) − e<sub>f</sub>(T<sub>2,in</sub>)] dt,&nbsp; η<sub>b,dis</sub> = E<sub>del</sub>/E<sub>rel</sub>'}<br><span class="c">边界㶲与边界㶲效率（小论文口径）</span>`)}</div>
-      <div class="sec"><h4>结论要点</h4><ul class="list">${m==='charge' ? '<li>充热要求 W₂ ≫ W₁ 以维持热源温度；稳定工况 η_b 93.6–98.8 %。</li><li>ṁ₂ = 20 kg/h 列在充热中为数值分支，不是物理结论。</li>' : '<li>放热时 W₂ 大反而压低交付温度：两组交付冷流的㶲都是 0.30 MJ，上限 81 °C。</li><li>放热 η_b（63 / 84 %）低于充热，源于大温降/小温升的不对称与更低的绝对温度。</li>'}</ul></div>`
+      <div class="sec"><h4>比较方法</h4><ul class="list">${m==='charge' ? '<li>固定 UA 比较二次侧流量，再固定流量比较 UA；热源投入与床层捕获㶲应使用同一时间窗口。</li><li>流量对热容率比和换热器效能的影响需结合当前报告诊断判断，不能直接沿用旧求解器的数值分支结论。</li>' : '<li>同时比较交付温度、累计放热与产品㶲；相同温升不意味着相同交付热量。</li><li>不同充热终态的放热记录分别展示；在 checkpoint 连续性未核实前，不计算本批次完整循环效率。</li>'}</ul></div>`
   },
   wall: {
     eyebrow:"BOUNDARY · WALL", title:"壁面散热", en:"Wall heat loss to ambient · k ≈ 0.22–0.25 W/K",
@@ -85,24 +85,24 @@ const INFO = {
       <div class="sec"><h4>简介</h4><p>模型固有的罐壁向 20 °C 环境的散热。由所有工况的稳态尾段识别：充热平台进出口恒差 3.5 K（39–41 W）；放热尾段床层停在 58.5 °C、空气反向补 8–9 W。</p></div>
       <div class="sec"><h4>在模型中的功能</h4><p>决定充热后期的"平台"和放热的长尾。它使 E_bed 不等于储存量，使放热累计曲线在峰值后下降。</p></div>
       <div class="sec"><h4>公式</h4>${F(`Q<sub>wall</sub> ≈ k<sub>wall</sub> (T̄<sub>bed</sub> − 20 °C),&nbsp; k<sub>wall</sub> ≈ 0.23 W/K<br>E<sub>bed,net</sub> = E<sub>bed,air</sub> − ∫ Q<sub>wall</sub> dt<br><span class="c">hx1000 mdot100 充热 1872 min：空气侧 7.76 MJ，壁损 4.50 MJ，净储能 3.26 MJ</span>`)}</div>
-      <div class="sec"><h4>对分析的影响</h4><ul class="list"><li>放热量取空气侧累计曲线的<b>峰值</b>（hx1000：2.47 MJ @ 229 min），终值受尾巴长度支配。</li><li>往返效率不能直接报 E_dis/E_chg；可报"峰值放热 / 净储能 ≈ 72–76 %"。</li><li>充热不必跑到 1872 min；平台出现后即可停。</li></ul></div>`
+      <div class="sec"><h4>对分析的影响</h4><ul class="list"><li>累计放热应同时保留峰值与终值；尾段负功率会使终值下降，不能把绝对值积分当作净放热。</li><li>壁损修正采用简化估计；所得净储能不是全域焓积分，不能据此直接认定相变完成。</li><li>长时平台需结合胶囊内部温度、场量与终点记录判断。上方固定尾段数值及公式示例来自历史批次。</li></ul></div>`
   },
   udf: {
-    eyebrow:"UDF · CONTROL", title:"UDF 控制逻辑", en:"Heat_exchanger_2.c · DEFINE_ADJUST / DEFINE_PROFILE / REPORT_DEFINITION_FN",
+    eyebrow:"UDF · CONTROL", title:"UDF 控制逻辑", en:"Charge / discharge NTU UDF · solver version 20260923",
     body: ()=>`
       <div class="sec"><h4>简介</h4><p>C 语言 UDF，把储热罐出口温度、换热器传热计算和入口边界实时耦合。宏开关 <span class="mono">ENABLE_CLOSED_LOOP</span> 在开环（固定入口温度）与闭环之间切换。</p></div>
-      <div class="sec"><h4>每次迭代做什么</h4><ul class="list"><li>读 zone 出口面的质量加权平均温度（<span class="mono">F_FLUX · F_T</span>）。</li><li>解换热器：<span class="mono">calculate_hx_outlet()</span>（LMTD-Newton，最多 50 次，残差 1 %）。</li><li>亚松弛 0.2 后写入口温度 profile；由入口面平均密度算速度保持 40 kg/h。</li><li>输出 <span class="mono">report_t2_in / report_t2_out / report_hx_status / report_inlet_vel</span>。</li></ul></div>
-      <div class="sec"><h4>关键宏</h4><div class="kv"><div>INLET / OUTLET_ZONE_ID</div><div>8 / 9（放热反转为 9 / 8）</div><div>M_DOT_1_SET</div><div>40/3600 kg/s</div><div>HX_UA · M_DOT_2</div><div>W/K · kg/s（100 kg/h = 0.027778）</div><div>T_IN_2_C</div><div>200（充）/ 60（放）</div><div>TEMP_RELAX</div><div>0.2</div><div>TRIGGER_DELTA_K</div><div>0.5（放热续算需强制开启）</div></div></div>
-      <div class="sec"><h4>改进清单</h4><div class="note">① 用 ε–NTU 闭式解替换 Newton；② 增加 eps / Q / 收敛标记报告；③ 若需跨时间步松弛，用 N_TIME 判断每步只更新一次。</div></div>`
+      <div class="sec"><h4>每次迭代做什么</h4><ul class="list"><li>对出口正向质量流量加权取温度，并单独记录回流。</li><li>由 ε–NTU 闭式解得到一次侧目标温度、二次侧出口温度与有符号换热量。</li><li>亚松弛 0.2 后更新入口温度；由入口密度与面积计算速度，以保持 40 kg/h。</li><li>时间步末重新取实际场计算诊断，不再推进入口边界；hx_valid=1 只表示代数与输入有效。</li></ul></div>
+      <div class="sec"><h4>关键宏</h4><div class="kv"><div>INLET / OUTLET_ZONE_ID</div><div>8 / 9（放热反转为 9 / 8）</div><div>M_DOT_1_SET</div><div>40/3600 kg/s</div><div>HX_UA · M_DOT_2</div><div>W/K · kg/s（100 kg/h = 0.027778）</div><div>T_IN_2_C</div><div>200（充）/ 60（放）</div><div>TEMP_RELAX</div><div>0.2</div><div>GEOMETRY_FACTOR</div><div>r2默认三维1.0；二维轴对称需核对每弧度换算，并与Fluent原生全域流量报告比较</div></div></div>
+      <div class="sec"><h4>续算与验收</h4><div class="note">充热末态保存 case/data，反转入口与出口后读取该场并重置 UDF 状态，保留床层温度场。阶段详情显示诊断验收结果；首批需完成 6 核短算检查。操作见《UDF_NTU_验证与操作手册_20260923.md》。</div></div>`
   },
   metrics: {
     eyebrow:"METRICS", title:"监测与评价指标", en:"Report files · first-law and boundary-exergy metrics",
     body: (m)=>`
       <div class="sec"><h4>四端温度</h4><div class="kv"><div>床层入口 / 出口</div><div>t_in_domain-rfile.out（zone 8 / zone 9）</div><div>二次侧入口 / 出口</div><div>report_t2_in-rfile.out</div><div>流量</div><div>mass_flow-rfile.out（符号 = 流向）</div></div></div>
       <div class="sec"><h4>第一定律</h4>${F(`Q<sub>bed</sub> = W<sub>1</sub>(T<sub>bed,in</sub> − T<sub>bed,out</sub>)<br>E<sub>bed</sub>(t<sub>k</sub>) = Σ ½(Q<sub>k</sub> + Q<sub>k−1</sub>) Δt<br>t<sub>190</sub>：床层<b>出口</b>到 190 °C 的时间（脚本口径 time_T1out_190C）<br>t<sub>50</sub> / t<sub>90</sub>：累计放热达峰值 50 % / 90 % 的时刻`)}</div>
-      <div class="sec"><h4>换热器实现度</h4>${F(`UA<sub>eff</sub> = Q<sub>HX</sub>/ΔT<sub>LMTD</sub>，&nbsp; ε<sub>actual</sub> = (T<sub>1,in</sub> − T<sub>1,out</sub>)/(T<sub>1,in</sub> − T<sub>2,in</sub>)<br><span class="c">数据分层：参数吻合 / 有效 UA 偏低 / 数值分支 / 高效饱和（不可辨识）</span>`)}</div>
+      <div class="sec"><h4>换热器实现度</h4>${F(`UA<sub>eff</sub> = |Q<sub>HX</sub>|/|ΔT<sub>LMTD</sub>|，&nbsp; ε<sub>actual</sub> = |W<sub>1</sub>(T<sub>1,in</sub> − T<sub>1,out</sub>)|/[C<sub>min</sub>|T<sub>1,in</sub> − T<sub>2,in</sub>|]<br><span class="c">标准效能使用较小热容率；20 kg/h 时不能直接用一次侧温降比。历史分析需重新计算才使用此口径。</span>`)}</div>
       <div class="sec"><h4>边界㶲</h4>${F(`e<sub>f</sub>(T) = c<sub>p</sub>[(T − T<sub>0</sub>) − T<sub>0</sub> ln(T/T<sub>0</sub>)]<br>充热 η<sub>b</sub> = E<sub>gain</sub>/E<sub>src</sub>；放热 η<sub>b,dis</sub> = E<sub>del</sub>/E<sub>rel</sub>；全周期 η<sub>rt</sub> = E<sub>del,dis</sub>/E<sub>src,chg</sub><br><span class="c">hx1000：4.4 % + 69.1 %（床层内部）+ 4.3 % + 22.2 %（交付）</span>`)}</div>
-      <div class="sec"><h4>容易读错</h4><ul class="list"><li>累计放热终值 ≠ 放热量（取峰值）。</li><li>hx50 实现的是 UA_eff ≈ 10，不是 50。</li><li>hx1000 的 LMTD → 0，不能反算 UA。</li><li>切换后前 3 步为瞬态。</li></ul></div>`
+      <div class="sec"><h4>容易读错</h4><ul class="list"><li>累计放热终值与峰值的意义不同，均需保留有符号功率。</li><li>登记的 UA、实际可辨识 UA_eff 与理论效能应区分；旧 hx50 的数值分支结论不能用于本批次。</li><li>效能接近 1 时 LMTD 很小，UA 难以反算，不能仅凭此认定参数已验证。</li><li>重测批次保留切换后的有效采样；稳定诊断采用阶段时间超过 8 min 的记录。历史分析曾跳过前 3 步，口径不同。</li><li>边界㶲利用率未扣除风机/泵功，不等于系统净效率。</li></ul></div>`
   }
 };
 const COMPONENTS = [

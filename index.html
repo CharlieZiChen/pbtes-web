@@ -6,7 +6,8 @@
 <title>闭式循环相变填充床储热系统 · 演示与数据库</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="app.css?v=9fee2b02">
+<link rel="stylesheet" href="app.css?v=73a00237">
+<link rel="stylesheet" href="research.css?v=4c5677b0">
 </head>
 <body>
 <div id="app">
@@ -15,6 +16,7 @@
     <div class="tabs" id="tabs">
       <button data-view="demo" class="on"><span class="k">1</span>演示 <span class="k">DEMO</span></button>
       <button data-view="library"><span class="k">2</span>数据库 <span class="k">LIBRARY</span></button>
+      <button data-view="research"><span class="k">3</span>研究分析 <span class="k">RESEARCH</span></button>
     </div>
     <div class="seg" id="modeSeg" style="margin-left:6px">
       <button data-mode="charge" class="on"><span class="k">01</span>充热</button>
@@ -50,23 +52,24 @@
   <section id="view-library" class="view">
     <div class="libbar">
       <div class="row1">
-        <div><div class="eyebrow">LIBRARY / 数据库</div><h2>按日期浏览计算结果 <span class="count" id="libCount"></span></h2></div>
+        <div><div class="eyebrow">LIBRARY / 数据库</div><h2>浏览充放热数据 <span class="count" id="libCount"></span></h2></div>
         <div class="tabs" id="libTabs" style="margin-left:auto"><button data-tab="stages" class="on">阶段 <span class="k" id="nStages"></span></button><button data-tab="cycles">周期 <span class="k" id="nCycles"></span></button><button data-tab="compare">对比 <span class="k" id="nCmps"></span></button></div>
       </div>
       <div id="selbar"><span class="eyebrow">SELECTION / 已选</span><span id="selInfo"></span><button class="btn primary" id="selCompare">对比所选</button><button class="btn" id="selClear">清空</button></div>
       <div class="filters" id="libFilters">
-        <span class="lab">模式</span><select id="f-mode"><option value="">全部</option><option value="charge">充热</option><option value="discharge">放热</option><option value="open">开环</option></select>
-        <span class="lab">UA</span><select id="f-ua"></select>
-        <span class="lab">ṁ₂</span><select id="f-m2"></select>
-        <span class="lab">状态</span><select id="f-status"></select>
-        <span class="lab">项目</span><select id="f-project"></select>
-        <span class="lab">日期</span><input id="f-date" placeholder="2026-07" style="min-width:110px">
-        <input id="f-q" placeholder="搜索 case_id / 备注 / 标签">
-        <button class="btn" id="f-clear">清除</button>
+        <span class="lab dataset-filter">数据集</span><select class="dataset-filter" id="f-dataset" aria-label="选择数据批次"></select>
+        <span class="lab stage-filter">模式</span><select class="stage-filter" id="f-mode"><option value="">全部</option><option value="charge">充热</option><option value="discharge">放热</option><option value="open">开环</option></select>
+        <span class="lab stage-filter">UA</span><select class="stage-filter" id="f-ua"></select>
+        <span class="lab stage-filter">ṁ₂</span><select class="stage-filter" id="f-m2"></select>
+        <span class="lab stage-filter">状态</span><select class="stage-filter" id="f-status"></select>
+        <span class="lab stage-filter">项目</span><select class="stage-filter" id="f-project"></select>
+        <span class="lab stage-filter">归档日期</span><input class="stage-filter" id="f-date" placeholder="2026-10" style="min-width:110px">
+        <input class="stage-filter" id="f-q" placeholder="搜索工况 / case_id / 备注 / 标签">
+        <button class="btn stage-filter" id="f-clear">清除</button>
       </div>
       <div class="legend-status">
         <span class="status-badge ok"><span class="d"></span>参数吻合</span>
-        <span class="status-badge low"><span class="d"></span>有效 UA 偏低（数值分支）</span>
+        <span class="status-badge low"><span class="d"></span>有效 UA 偏低</span>
         <span class="status-badge na"><span class="d"></span>不可辨识（ε≈1）</span>
         <span class="status-badge bad"><span class="d"></span>疑似失败</span>
         <span class="status-badge open"><span class="d"></span>开环基准</span>
@@ -74,6 +77,8 @@
     </div>
     <div class="liblist" id="liblist"></div>
   </section>
+
+  <section id="view-research" class="view" aria-label="研究分析"><div id="researchRoot"></div></section>
 
   <!-- ============ 右侧抽屉（两视图共用） ============ -->
   <aside>
@@ -104,9 +109,10 @@
 
 <script src="three.min.js?v=912bc7c1"></script>
 <script src="OrbitControls.js?v=035e216c"></script>
-<script src="library.js?v=f4216367"></script>
-<script src="content.js?v=3d268188"></script>
-<script src="scene.js?v=d61ef522"></script>
-<script src="app.js?v=dfed4ce7"></script>
+<script src="library.js?v=c45386c0"></script>
+<script src="content.js?v=94792c0b"></script>
+<script src="scene.js?v=01333860"></script>
+<script src="research.js?v=298cd9f9"></script>
+<script src="app.js?v=6c59a49e"></script>
 </body>
 </html>

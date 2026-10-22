@@ -82,6 +82,7 @@ aside .body{padding:6px 22px 22px;overflow:auto;flex:1}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px}
 .kv div:nth-child(odd){color:var(--text2)}
 .kv div:nth-child(even){font-family:var(--mono);color:var(--ink);font-size:12px}
+.kv div{min-width:0;overflow-wrap:anywhere}
 .formula{font-family:var(--mono);font-size:12px;color:var(--ink);background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin:6px 0;line-height:1.6;overflow-x:auto}
 .formula .c{color:var(--muted);font-size:11px}
 .note{border-left:3px solid var(--amber);background:var(--amber-tint);padding:8px 12px;border-radius:0 8px 8px 0;font-size:12.5px;line-height:1.6;color:var(--ink)}
@@ -124,6 +125,21 @@ footer.hidden{display:none}
 .status-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);white-space:nowrap}
 .status-badge .d{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
 .status-badge.ok .d{background:var(--green)} .status-badge.low .d{background:var(--amber)} .status-badge.na .d{background:var(--muted)} .status-badge.bad .d{background:#ED3C50} .status-badge.open .d{background:var(--purple)}
+.dataset-note{margin:0 0 12px;padding:10px 12px;border:1px solid #dbe4ee;background:#f7fafc;color:var(--ink);font-size:12px;line-height:1.55}.dataset-note span{color:var(--muted)}
+.dataset-note p{margin:5px 0;color:var(--text2)}
+.condition-inventory{margin-top:9px;border-top:1px solid var(--line);padding-top:7px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:18px}
+.condition-inventory summary{grid-column:1/-1;cursor:pointer;color:var(--text2);font-size:11.5px;margin-bottom:5px}
+.condition-item{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:5px 0;border-bottom:1px solid #e5ebf3;min-width:0}
+.condition-item>b{font-family:var(--mono);font-size:11px;white-space:nowrap}
+.condition-phases{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+.phase-link{font-size:10.5px;padding:2px 6px;border:1px solid #c6d8ff;border-radius:5px;background:#fff;color:var(--brand)!important;white-space:nowrap}
+.phase-link.warn{border-color:#f0d9a3;color:var(--amber)!important;background:var(--amber-tint)}
+.phase-link.missing{border-style:dashed;color:var(--muted)!important;background:var(--soft)}
+.filters.dataset-only .stage-filter{display:none}
+button:disabled{cursor:not-allowed;opacity:.45}
+.chart-control{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--text2);margin:0 0 8px}
+.chart-control select{max-width:245px;font:inherit;padding:5px 7px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink)}
+@media(max-width:1250px){.condition-inventory{grid-template-columns:1fr}}
 .mode-pill{display:inline-block;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;padding:2px 7px;border-radius:6px;border:1px solid var(--line);color:var(--text2);background:#fff}
 .mode-pill.charge{color:var(--amber);border-color:#f0d9a3;background:var(--amber-tint)}
 .mode-pill.discharge{color:var(--brand);border-color:#c6d8ff;background:var(--brand-tint)}

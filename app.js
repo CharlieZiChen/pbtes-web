@@ -9,10 +9,28 @@ const { INFO, COMPONENTS } = window.PBTES_CONTENT;
 const LIB = window.PBTES_LIBRARY || {cases:[], cycles:[], comparisons:[]};
 const MODE_CN={charge:"充热",discharge:"放热",open:"开环",cycle:"全周期"};
 const MODE_K={charge:"chg",discharge:"dis",open:"open",cycle:"cyc"};
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const DATASETS=LIB.datasets||[];
+const LEGACY_DATASET="legacy";
+const datasetId=c=>c.dataset||LEGACY_DATASET;
+const datasetLabel=id=>(DATASETS.find(d=>d.dataset_id===id)||{}).label||(id===LEGACY_DATASET?"历史数据（原有批次）":id);
+const DEFAULT_DATASET=DATASETS.some(d=>d.dataset_id==="retest-2026-10")?"retest-2026-10":"";
+const phaseOf=s=>s.c.phase||(s.mode==="open"?"charge":s.mode);
+const isOpen=s=>s.mode==="open"||(s.c.params||{}).closed_loop===false;
+const phaseLabel=s=>(isOpen(s)?"开环 · ":"闭环 · ")+(MODE_CN[phaseOf(s)]||phaseOf(s));
+const hasValues=a=>Array.isArray(a)&&a.some(v=>v!=null&&Number.isFinite(v));
+const playable=s=>!!s&&Array.isArray(s.st.series&&s.st.series.tau_min)&&s.st.series.tau_min.length>1&&hasValues(s.st.series.bed_in_C)&&hasValues(s.st.series.bed_out_C);
+const qualityNotes=s=>Array.from(new Set([...(s.c.quality&&s.c.quality.notes||[]),...(s.st.metrics.quality_notes||[]),...(s.c.review_reasons||[]),...(s.c.warnings||[])].map(x=>typeof x==="string"?x:JSON.stringify(x))));
+const PHASE_STATUS={recorded:"有记录",recorded_with_warnings:"有记录 · 需复核",missing:"缺失",incomplete:"不完整"};
+const samplingNote="新批次保留完整采样，历史曲线可能降采样。";
+const researchStage=s=>(LIB.research&&LIB.research.records||[]).filter(r=>!r.segment_only).flatMap(r=>r.research&&r.research.stages||[]).find(r=>r.stage_id===s.id);
+const probeName=(s,k)=>(researchStage(s)?.probe_labels||{})[k]||("测点 "+parseInt(k.slice(10,12),10));
+const timeAxisNote=s=>datasetId(s.c)==="retest-2026-10"?(phaseOf(s)==="discharge"?"横轴为放热历时，首条有效记录记为 0；原始绝对 flow-time 保留。":"横轴为原始 flow-time，不补齐首条记录前的时段。") : "横轴沿用历史阶段时间口径。";
+function physicalTimes(s){ const S=s.st.series; return hasValues(S.flow_time_min)?S.flow_time_min:S.tau_min.map(v=>v+(s.st.metrics.t_start_s||0)/60); }
 
 /* ---------------------------------------------------------------- 阶段索引 */
 const STAGES=[]; // {c: case, st: stage, id, mode, date}
-LIB.cases.forEach(c=>c.stages.forEach(st=>STAGES.push({c, st, id:st.stage_id, mode:st.mode, date:(c.run_datetime||"").slice(0,10)})));
+(LIB.cases||[]).forEach(c=>(c.stages||[]).forEach(st=>{ st.metrics=st.metrics||{}; st.series=st.series||{}; STAGES.push({c, st, id:st.stage_id, mode:st.mode, date:(c.run_datetime||"").slice(0,10)}); }));
 const STAGE_BY_ID=Object.fromEntries(STAGES.map(s=>[s.id,s]));
 const CYCLES=(LIB.cycles||[]).filter(c=>STAGE_BY_ID[c.charge_stage]&&STAGE_BY_ID[c.discharge_stage]);
 const CYCLE_BY_ID=Object.fromEntries(CYCLES.map(c=>[c.cycle_id,c]));
@@ -22,19 +40,31 @@ const CMP_BY_ID=Object.fromEntries(COMPARISONS.map(c=>[c.cmp_id,c]));
 const TYPE_CN={replicate:"重复性 / 误差分析",param_ua:"同 UA · ṁ₂ 变化 → η_b",param_m2:"同 ṁ₂ · UA 变化 → η_b"};
 const PALETTE=["#1264FF","#E3A83A","#12A56B","#8B5CF6","#E0475B","#0EA5B7","#B97708","#64748B"];
 function cycleLabel(c){ return `cyc · ua${g(c.UA_W_K)} · m${g(c.mdot2_kg_h)}`; }
-function statusClass(ds){ if(!ds) return "na"; if(ds.startsWith("参数吻合")) return "ok"; if(ds.startsWith("有效 UA 偏低")) return "low"; if(ds.startsWith("疑似")||ds.startsWith("有效 UA 偏高")) return "bad"; if(ds.startsWith("开环")) return "open"; return "na"; }
-function stageLabel(s){ const c=s.c; const p=c.params||{}; const parts=[MODE_K[s.mode]||s.mode];
-  if(s.mode!=="open"){ if(p.UA_W_K!=null) parts.push("ua"+g(p.UA_W_K)); if(p.mdot2_kg_h!=null) parts.push("m"+g(p.mdot2_kg_h)); const t2=(s.st.series.t2in_C||[]).find(v=>v!=null) ?? p.T2in_C; if(t2!=null) parts.push("t"+g(t2)); }
+function statusClass(ds){ if(!ds) return "na"; if(ds.startsWith("参数吻合")) return "ok"; if(ds.startsWith("有效 UA 偏低")||ds.startsWith("待验收")) return "low"; if(ds.startsWith("疑似")||ds.startsWith("有效 UA 偏高")||ds==="UDF 诊断异常"||ds==="超出换热量物理上限") return "bad"; if(ds.startsWith("开环")) return "open"; return "na"; }
+function stageLabel(s){ const c=s.c; const p=c.params||{}; const parts=[isOpen(s)?"开环"+(MODE_CN[phaseOf(s)]||""):(MODE_K[s.mode]||s.mode)];
+  if(!isOpen(s)){ if(p.UA_W_K!=null) parts.push("ua"+g(p.UA_W_K)); if(p.mdot2_kg_h!=null) parts.push("m"+g(p.mdot2_kg_h)); const t2=(s.st.series.t2in_C||[]).find(v=>v!=null) ?? p.T2in_C; if(t2!=null) parts.push("t"+g(t2)); }
   return parts.join(" · "); }
+function inDataset(id){ return !state.filters.dataset||id===state.filters.dataset; }
+function scopedStages(){ return STAGES.filter(s=>inDataset(datasetId(s.c))); }
+function cycleDataset(c){ return c.dataset||datasetId(STAGE_BY_ID[c.charge_stage].c); }
+function cmpDataset(c){ return c.dataset||(c.members[0]&&STAGE_BY_ID[c.members[0].stage_id]?datasetId(STAGE_BY_ID[c.members[0].stage_id].c):LEGACY_DATASET); }
+function scopedCycles(){ return CYCLES.filter(c=>inDataset(cycleDataset(c))); }
+function scopedComparisons(){ return COMPARISONS.filter(c=>inDataset(cmpDataset(c))); }
+function datasetSummary(){
+  const d=DATASETS.find(x=>x.dataset_id===state.filters.dataset); if(!d) return "";
+  const missing=(d.missing_stages||[]).map(x=>typeof x==="string"?x:`${x.condition_id} ${MODE_CN[x.phase]||x.phase}`);
+  const inventory=(d.conditions||[]).map(c=>`<div class="condition-item"><b>${esc(c.label||c.condition_id)}</b><span class="condition-phases">${["charge","discharge"].map(p=>{const a=(c.phases||{})[p]||{status:"missing"};const text=MODE_CN[p]+" · "+(PHASE_STATUS[a.status]||a.status); return a.stage_id&&STAGE_BY_ID[a.stage_id]?`<a class="phase-link ${a.status==="recorded"?"":"warn"}" href="#library/${encodeURIComponent(a.stage_id)}" title="${esc((a.notes||[]).join("；"))}">${esc(text)}</a>`:`<span class="phase-link missing" title="${esc(a.reason||(a.notes||[]).join("；"))}">${esc(text)}</span>`;}).join("")}</span></div>`).join("");
+  return `<div class="dataset-note"><b>${esc(d.label||d.dataset_id)}</b> · ${d.physical_cases||d.conditions&&d.conditions.length||0} 组工况 · ${d.available_stages||0}/${d.expected_stages||0} 个阶段可读${missing.length?` · 缺失：${esc(missing.join("、"))}`:""}${(d.quality_notes||[]).length?`<p>${d.quality_notes.map(esc).join("；")}</p>`:""}${inventory?`<details class="condition-inventory" open><summary>工况与阶段清单 · 点击查看记录</summary>${inventory}</details>`:""}</div>`;
+}
 
 /* ---------------------------------------------------------------- 回放数据适配 */
 function toPlayback(s){
-  const S=s.st.series, mode=s.mode; const n=S.tau_min.length;
-  const E=S.e_bed_MJ.map(v=> v==null?null:(mode==="discharge"?-v:v));
+  const S=s.st.series, mode=s.mode; const n=(S.tau_min||[]).length;
+  const E=(S.e_bed_MJ||Array(n).fill(null)).map(v=> v==null?null:(mode==="discharge"?-v:v));
   let Emax=0; if(mode==="discharge"){ E.forEach(v=>{ if(v!=null&&v>Emax) Emax=v; }); } else { for(let i=n-1;i>=0;i--){ if(E[i]!=null){Emax=E[i];break;} } }
   const T2in_now = (S.t2in_C||[]).find(v=>v!=null) ?? (s.c.params||{}).T2in_C ?? null;
-  return { mode, id:s.id, label:stageLabel(s), case_id:s.c.case_id, date:s.date, dt_s:s.c.dt_s, metrics:s.st.metrics, params:s.c.params||{}, T2in_now,
-    t:S.tau_min, Tin:S.bed_in_C, Tout:S.bed_out_C, T2in:S.t2in_C||null, T2out:S.t2out_C||null, Q:S.q_bed_W, E, Emax:Math.max(Emax,1e-6) };
+  return { mode, open_loop:isOpen(s), id:s.id, label:stageLabel(s), case_id:s.c.case_id, date:s.date, dt_s:s.c.dt_s, metrics:s.st.metrics, params:s.c.params||{}, T2in_now,
+    t:S.tau_min||[], Tin:S.bed_in_C||[], Tout:S.bed_out_C||[], T2in:S.t2in_C||null, T2out:S.t2out_C||null, Q:S.q_bed_W||Array(n).fill(null), E, Emax:Math.max(Emax,1e-6) };
 }
 function toCyclePlayback(c){
   const A=toPlayback(STAGE_BY_ID[c.charge_stage]), B=toPlayback(STAGE_BY_ID[c.discharge_stage]);
@@ -48,13 +78,13 @@ function toCyclePlayback(c){
     t, Tin:A.Tin.concat(B.Tin), Tout:A.Tout.concat(B.Tout), T2in:cat(A.T2in,B.T2in), T2out:cat(A.T2out,B.T2out), Q:A.Q.concat(B.Q.map(v=>v==null?null:-v)), E, Emax, A, B };
 }
 function modeAt(u){ const d=state.data; if(!d||d.mode!=="cycle") return d?d.mode:"charge"; return u<d.u_sw?"charge":"discharge"; }
-function pickBaseline(mode){ let s=STAGES.find(x=>x.mode===mode&&(x.c.tags||[]).includes("baseline")); if(!s) s=STAGES.slice().reverse().find(x=>x.mode===mode); return s||null; }
+function pickBaseline(mode){ const pool=STAGES.filter(x=>x.mode===mode&&playable(x)); const preferred=pool.filter(x=>datasetId(x.c)===DEFAULT_DATASET); return preferred.find(x=>(x.c.tags||[]).includes("baseline"))||preferred[0]||pool.find(x=>(x.c.tags||[]).includes("baseline"))||pool.slice().reverse()[0]||null; }
 
 /* ---------------------------------------------------------------- 状态 */
 const state={ view:"demo", mode:"charge", u:0, playing:false, speed:1, sel:"system", stageFor:{charge:null,discharge:null,open:null,cycle:null}, data:null, libSel:null, libTab:"stages", cmpSel:new Set(), adhoc:null,
-  filters:{mode:"",ua:"",m2:"",status:"",project:"",date:"",q:""} };
+  filters:{mode:"",ua:"",m2:"",status:"",dataset:DEFAULT_DATASET,project:"",date:"",q:""} };
 ["charge","discharge","open"].forEach(m=>{ const b=pickBaseline(m); if(b) state.stageFor[m]=b.id; });
-if(CYCLES.length){ const pref=CYCLES.find(c=>!c.needs_confirmation&&c.link==="same_run")||CYCLES.find(c=>!c.needs_confirmation)||CYCLES[0]; state.stageFor.cycle=pref.cycle_id; }
+{ const cycles=CYCLES.filter(c=>!DEFAULT_DATASET||cycleDataset(c)===DEFAULT_DATASET); if(cycles.length){ const pref=cycles.find(c=>!c.needs_confirmation&&c.link==="same_run")||cycles.find(c=>!c.needs_confirmation)||cycles[0]; state.stageFor.cycle=pref.cycle_id; } }
 
 /* ---------------------------------------------------------------- 抽屉 */
 function showInfo(id){
@@ -62,8 +92,9 @@ function showInfo(id){
   $("#dEyebrow").textContent=it.eyebrow; $("#dTitle").textContent=it.title; $("#dEn").textContent=it.en;
   $("#dBody").innerHTML=it.body((state.mode==="open"||state.mode==="cycle")?modeAt(state.u):state.mode); $("#dActions").innerHTML=""; $("#dActions").classList.remove("on");
   if(id==="system"&&state.data){ const d=state.data, M=d.metrics, p=d.params; const pct=v=>v==null?"—":(100*v).toFixed(1)+" %";
-    const wf=M.waterfall_240||M.waterfall_full;
-    const rows= d.mode==="cycle" ? [["数据",d.case_id],["配对方式",LINK_CN[d.cycle.link]||d.cycle.link],["换热器",`UA ${g(p.UA_W_K)} W/K · ṁ₂ ${g(p.mdot2_kg_h)} kg/h · T₂,in ${g(d.T2in_now)} → ${g(d.T2in_dis)} °C`],["净储能 / 峰值放热",g(M.E_net_stored_MJ)+" / "+g(M.E_rel_peak_MJ)+" MJ"],["可回收比例",pct(M.recoverable_fraction)],["η_b 充 / 放",pct(M.eta_b_charge_240)+" / "+pct(M.eta_b_dis)],["η_rt（往返㶲效率）",wf?pct(wf.eta_rt):"—"]]
+    const wf=M.waterfall_full;
+    const rows= d.open_loop ? [["数据",d.case_id],["模式","开环"+(d.mode==="discharge"?"放热":"充热")],["入口 / 排出",`${g(M.bed_in_start_C)} °C / 出口直排`],["时长",g(M.duration_min)+" min"],["阶段状态",PHASE_STATUS[M.phase_status]||M.phase_status||M.data_status||"—"],[d.mode==="discharge"?"峰值放热":"全程空气侧吸热",g(d.mode==="discharge"?M.E_rel_peak_MJ:M.E_bed_air_full_MJ)+" MJ"]]
+      : d.mode==="cycle" ? [["数据",d.case_id],["配对方式",LINK_CN[d.cycle.link]||d.cycle.link],["换热器",`UA ${g(p.UA_W_K)} W/K · ṁ₂ ${g(p.mdot2_kg_h)} kg/h · T₂,in ${g(d.T2in_now)} → ${g(d.T2in_dis)} °C`],["净储能 / 峰值放热",g(M.E_net_stored_MJ)+" / "+g(M.E_rel_peak_MJ)+" MJ"],["可回收比例",pct(M.recoverable_fraction)],["η_b 全程充 / 放",pct(M.eta_b_charge_full??d.A.metrics.eta_b_full)+" / "+pct(M.eta_b_dis)],["η_rt（全充热程）",wf?pct(wf.eta_rt):"—"]]
       : d.mode==="charge" ? [["数据",d.case_id],["换热器",`UA ${g(p.UA_W_K)} W/K · ṁ₂ ${g(p.mdot2_kg_h)} kg/h · T₂,in ${g(d.T2in_now)} °C`],["出口到 190 °C",M.t190_bed_out_min!=null?g(M.t190_bed_out_min)+" min":"未到"],["E_bed 0–240 min",g(M.E_bed_240_MJ)+" MJ"],["η_b 0–240",pct(M.eta_b_240)],["UA_eff / 状态",(M.UA_eff_median_W_K!=null?g(M.UA_eff_median_W_K)+" W/K · ":"")+(M.data_status||"—")]]
       : d.mode==="discharge" ? [["数据",d.case_id],["换热器",`UA ${g(p.UA_W_K)} W/K · ṁ₂ ${g(p.mdot2_kg_h)} kg/h · T₂,in ${g(d.T2in_now)} °C`],["峰值放热",g(M.E_rel_peak_MJ)+" MJ @ "+g(M.t_peak_min)+" min"],["放出 90 %",g(M.t90_min)+" min"],["T₂,out 最高",g(M.T2out_max_C)+" °C"],["η_b,dis / 状态",pct(M.eta_b_dis)+" · "+(M.data_status||"—")]]
       : [["数据",d.case_id],["入口",`恒 ${g(M.bed_in_start_C)} °C，出口直排`],["出口到 190 °C",g(M.t190_bed_out_min)+" min"],["E_bed 0–240 min",g(M.E_bed_240_MJ)+" MJ"],["η_b 0–240",pct(M.eta_b_240)]];
@@ -82,7 +113,7 @@ const MODE_TEXT={
   cycle:{eyebrow:"03 / FULL CYCLE · 充放周期", title:"同一组参数下充热与放热连续回放", path:"充热：热源 → HX → 床层（自上而下） &nbsp;→&nbsp; <b>切换</b> &nbsp;→&nbsp; 放热：冷源 → HX → 床层（自下而上）"},
   open:{eyebrow:"00 / OPEN LOOP · 开环基准", title:"入口恒温 200 °C，出口直排，无二次侧换热器", path:"200 °C → zone 8 → 床层 → zone 9 → <b>排放</b>"} };
 function loadCycle(cid, opts={}){
-  const c=CYCLE_BY_ID[cid]; if(!c) return;
+  const c=CYCLE_BY_ID[cid]; if(!c||!playable(STAGE_BY_ID[c.charge_stage])||!playable(STAGE_BY_ID[c.discharge_stage])) return;
   state.stageFor.cycle=cid; state.mode="charge"; state.data=toCyclePlayback(c); state.u=0; state.playing=false; updatePlayIcon();
   $("#modeSeg").classList.add("auto"); const d=state.data, p=d.params, M=d.metrics, t=MODE_TEXT.cycle;
   $("#mcEyebrow").textContent=t.eyebrow; $("#mcTitle").textContent=t.title; $("#mcPath").innerHTML=t.path;
@@ -95,19 +126,20 @@ function loadCycle(cid, opts={}){
 }
 function syncModeSeg(){ const m=modeAt(state.u); $$("#modeSeg button").forEach(b=>b.classList.toggle("on",b.dataset.mode===m)); }
 function loadStage(stageId, opts={}){
-  const s=STAGE_BY_ID[stageId]; if(!s) return; $("#modeSeg").classList.remove("auto"); $("#tlMark").style.display="none";
+  const s=STAGE_BY_ID[stageId]; if(!playable(s)) return; $("#modeSeg").classList.remove("auto"); $("#tlMark").style.display="none";
   state.stageFor[s.mode]=stageId; state.mode=s.mode; state.data=toPlayback(s); state.u=0; state.playing=false; updatePlayIcon();
   $$("#modeSeg button").forEach(b=>b.classList.toggle("on",b.dataset.mode===s.mode));
-  const t=MODE_TEXT[s.mode]||MODE_TEXT.charge; const p=state.data.params; const M=state.data.metrics;
+  let t=MODE_TEXT[s.mode]||MODE_TEXT.charge; const p=state.data.params; const M=state.data.metrics;
+  if(isOpen(s)){ const dis=phaseOf(s)==="discharge", inlet=(s.st.series.bed_in_C||[]).find(v=>v!=null); t={eyebrow:`OPEN LOOP / ${dis?"DISCHARGING · 开环放热":"CHARGING · 开环充热"}`,title:`入口 ${g(inlet)} °C，空气穿过床层后直接排出`,path:dis?`${g(inlet)} °C → zone 9 → 床层 → zone 8 → <b>排放</b>`:`${g(inlet)} °C → zone 8 → 床层 → zone 9 → <b>排放</b>`}; }
   $("#mcEyebrow").textContent=t.eyebrow; $("#mcTitle").textContent=t.title; $("#mcPath").innerHTML=t.path;
   const descParts=[];
-  if(s.mode!=="open") descParts.push(`换热器 UA ${g(p.UA_W_K)} W/K，二次侧 ${g(p.mdot2_kg_h)} kg/h、${g(state.data.T2in_now)} °C`);
+  if(!isOpen(s)) descParts.push(`换热器 UA ${g(p.UA_W_K)} W/K，二次侧 ${g(p.mdot2_kg_h)} kg/h、${g(state.data.T2in_now)} °C`);
   descParts.push(`一次侧 ${g(p.mdot1_kg_h||40)} kg/h，Δt ${g(state.data.dt_s)} s，时长 ${g(M.duration_min)} min`);
   if(M.data_status) descParts.push(`数据状态：${M.data_status}`);
   $("#mcDesc").textContent=descParts.join("；")+"。";
   $("#tlCase").textContent=`${s.c.case_id}`;
   $("#curLabel").innerHTML=`<b>${stageLabel(s)}</b> · ${s.date} · <span class="status-badge ${statusClass(M.data_status)}"><span class="d"></span>${M.data_status||"—"}</span>`;
-  Scene.setHXLabel(()=> s.mode==="open"?"开环：无换热器":`UA ${g(p.UA_W_K)} W/K · ṁ₂ ${g(p.mdot2_kg_h)} kg/h`);
+  Scene.setHXLabel(()=> isOpen(s)?"开环：无换热器":`UA ${g(p.UA_W_K)} W/K · ṁ₂ ${g(p.mdot2_kg_h)} kg/h`);
   if(!opts.keepInfo) showInfo(state.sel);
 }
 $$("#modeSeg button").forEach(b=>b.onclick=()=>{ const m=b.dataset.mode;
@@ -152,13 +184,16 @@ function frame(now){
 }
 
 /* ---------------------------------------------------------------- 路由 */
-function go(view, arg){ location.hash = view==="library" ? ("#library"+(arg?"/"+arg:"")) : "#demo"; }
+function go(view, arg){ location.hash = view==="research" ? "#research" : view==="library" ? ("#library"+(arg?"/"+arg:"")) : "#demo"; }
 function route(){
   const h=location.hash||"#demo"; const [_,view,arg]=h.match(/^#(\w+)(?:\/(.+))?$/)||[null,"demo",null];
-  state.view=(view==="library")?"library":"demo";
+  state.view=(view==="research")?"research":(view==="library")?"library":"demo";
   $("#view-demo").classList.toggle("on",state.view==="demo"); $("#view-library").classList.toggle("on",state.view==="library");
+  if($("#view-research")) $("#view-research").classList.toggle("on",state.view==="research");
+  $("#app").classList.toggle("research-mode",state.view==="research");
   $("#footer").classList.toggle("hidden",state.view!=="demo"); $("#demoTools").style.display=state.view==="demo"?"":"none";
   $$("#tabs button").forEach(b=>b.classList.toggle("on",b.dataset.view===state.view));
+  if(state.view==="research"){ $("#app").classList.remove("cmpwide"); window.PBTES_RESEARCH&&window.PBTES_RESEARCH.mount(arg?decodeURIComponent(arg):null); return; }
   if(state.view==="library"){ if(arg){ const a=decodeURIComponent(arg);
       if(a.startsWith("cycle/")){ const cid=a.slice(6); if(CYCLE_BY_ID[cid]){ state.libTab="cycles"; state.libSel=cid; renderLibrary(); showCycleDetail(cid); return; } }
       if(a.startsWith("cmp/")){ const id=a.slice(4); if(id==="adhoc"&&state.adhoc){ state.libTab="compare"; state.libSel="adhoc"; renderLibrary(); showCompareDetail(state.adhoc); return; } if(CMP_BY_ID[id]){ state.libTab="compare"; state.libSel=id; renderLibrary(); showCompareDetail(CMP_BY_ID[id]); return; } }
@@ -180,71 +215,75 @@ function uniq(arr){ return Array.from(new Set(arr.filter(v=>v!=null))).sort((a,b
 function setFilter(k,v){ state.filters[k]=v; const el=$("#f-"+k); if(el) el.value=v; renderLibrary(); }
 function buildFilters(){
   const uas=uniq(STAGES.map(s=>s.c.params&&s.c.params.UA_W_K)), m2s=uniq(STAGES.map(s=>s.c.params&&s.c.params.mdot2_kg_h));
+  const datasets=Array.from(new Set(STAGES.map(s=>datasetId(s.c)))).sort((a,b)=>a===DEFAULT_DATASET?-1:b===DEFAULT_DATASET?1:a.localeCompare(b));
   const projects=Array.from(new Set(STAGES.map(s=>s.c.project).filter(Boolean))).sort();
   const statuses=Array.from(new Set(STAGES.map(s=>s.st.metrics.data_status).filter(Boolean)));
   const opt=(vals,fmtf)=>'<option value="">全部</option>'+vals.map(v=>`<option value="${v}">${fmtf?fmtf(v):v}</option>`).join("");
-  $("#f-ua").innerHTML=opt(uas,v=>g(v)+" W/K"); $("#f-m2").innerHTML=opt(m2s,v=>g(v)+" kg/h"); $("#f-project").innerHTML=opt(projects); $("#f-status").innerHTML=opt(statuses);
-  ["mode","ua","m2","status","project","date","q"].forEach(k=>{ const el=$("#f-"+k); el.oninput=el.onchange=()=>{ state.filters[k]=el.value; renderLibrary(); }; });
-  $("#f-clear").onclick=()=>{ Object.keys(state.filters).forEach(k=>state.filters[k]=""); ["mode","ua","m2","status","project","date","q"].forEach(k=>{$("#f-"+k).value="";}); renderLibrary(); };
+  $("#f-ua").innerHTML=opt(uas,v=>g(v)+" W/K"); $("#f-m2").innerHTML=opt(m2s,v=>g(v)+" kg/h"); $("#f-status").innerHTML=opt(statuses); $("#f-dataset").innerHTML=opt(datasets,datasetLabel); $("#f-project").innerHTML=opt(projects);
+  ["mode","ua","m2","status","dataset","project","date","q"].forEach(k=>{ const el=$("#f-"+k); el.value=state.filters[k]; el.oninput=el.onchange=()=>{ state.filters[k]=el.value; if(k==="dataset"){ state.cmpSel.clear(); state.libSel=null; } renderLibrary(); if(k==="dataset") showLibraryHome(); }; });
+  $("#f-clear").onclick=()=>{ Object.keys(state.filters).forEach(k=>state.filters[k]=""); ["mode","ua","m2","status","dataset","project","date","q"].forEach(k=>{$("#f-"+k).value="";}); state.libSel=null; renderLibrary(); showLibraryHome(); };
 }
 function filtered(){
   const f=state.filters; return STAGES.filter(s=>{ const p=s.c.params||{};
-    if(f.mode&&s.mode!==f.mode) return false; if(f.ua&&String(p.UA_W_K)!==f.ua) return false; if(f.m2&&String(p.mdot2_kg_h)!==f.m2) return false;
-    if(f.status&&s.st.metrics.data_status!==f.status) return false; if(f.project&&s.c.project!==f.project) return false;
+    if(f.mode&&(f.mode==="open"?!isOpen(s):phaseOf(s)!==f.mode)) return false; if(f.ua&&String(p.UA_W_K)!==f.ua) return false; if(f.m2&&String(p.mdot2_kg_h)!==f.m2) return false;
+    if(f.status&&s.st.metrics.data_status!==f.status) return false; if(f.dataset&&datasetId(s.c)!==f.dataset) return false; if(f.project&&s.c.project!==f.project) return false;
     if(f.date&&!(s.c.run_datetime||"").startsWith(f.date)) return false;
-    if(f.q){ const hay=(s.c.case_id+" "+(s.c.note||"")+" "+(s.c.tags||[]).join(" ")+" "+stageLabel(s)).toLowerCase(); if(!hay.includes(f.q.toLowerCase())) return false; }
+    if(f.q){ const hay=(s.c.case_id+" "+(s.c.condition_id||"")+" "+(s.c.note||"")+" "+(s.c.tags||[]).join(" ")+" "+stageLabel(s)).toLowerCase(); if(!hay.includes(f.q.toLowerCase())) return false; }
     return true; }).sort((a,b)=>(b.c.run_datetime||"").localeCompare(a.c.run_datetime||""));
 }
 function renderLibrary(){
-  $$("#libTabs button").forEach(b=>b.classList.toggle("on",b.dataset.tab===state.libTab)); $("#nStages").textContent=STAGES.length; $("#nCycles").textContent=CYCLES.length;
-  $("#nCmps").textContent=COMPARISONS.length+(state.adhoc?"+1":""); $("#app").classList.toggle("cmpwide",state.view==="library"&&state.libTab==="compare");
-  $("#libFilters").style.display = state.libTab==="stages" ? "" : "none"; $("#selbar").classList.toggle("on",state.libTab==="stages"&&state.cmpSel.size>0); updateSelbar();
+  const scope=scopedStages();
+  $$("#libTabs button").forEach(b=>b.classList.toggle("on",b.dataset.tab===state.libTab)); $("#nStages").textContent=scope.length; $("#nCycles").textContent=scopedCycles().length;
+  $("#nCmps").textContent=scopedComparisons().length+(state.adhoc&&inDataset(cmpDataset(state.adhoc))?"+1":""); $("#app").classList.toggle("cmpwide",state.view==="library"&&state.libTab==="compare");
+  $("#libFilters").style.display=""; $("#libFilters").classList.toggle("dataset-only",state.libTab!=="stages"); $("#selbar").classList.toggle("on",state.libTab==="stages"&&state.cmpSel.size>0); updateSelbar();
   if(state.libTab==="cycles") return renderCycles();
   if(state.libTab==="compare") return renderComparisons();
-  const list=$("#liblist"); const rows=filtered(); $("#libCount").textContent=`${rows.length} / ${STAGES.length} 个阶段 · ${LIB.cases.length} 个工况 · 生成 ${LIB.generated_at||"—"}`;
+  const list=$("#liblist"), rows=filtered(), dataset=DATASETS.find(d=>d.dataset_id===state.filters.dataset), sourceCount=new Set(scope.map(s=>s.c.case_id)).size;
+  $("#libCount").textContent=`${rows.length} / ${scope.length} 个阶段 · ${dataset&&dataset.physical_cases!=null?dataset.physical_cases+" 组工况":sourceCount+" 份来源记录"} · 生成 ${LIB.generated_at||"—"}`;
+  const dsSummary=datasetSummary();
   if(!STAGES.length){ list.innerHTML=`<div class="empty">库为空。请在 Mac 上运行 <code>python3 pbtes.py analyze --all</code> 与 <code>python3 pbtes.py export-web</code> 生成 <code>library.js</code>。</div>`; return; }
-  if(!rows.length){ list.innerHTML=`<div class="empty">没有符合过滤条件的阶段。</div>`; return; }
+  if(!rows.length){ list.innerHTML=dsSummary+`<div class="empty">没有符合过滤条件的阶段。</div>`; return; }
   const groups={}; rows.forEach(s=>{ (groups[s.date]=groups[s.date]||[]).push(s); });
-  let html=""; let idx=0;
+  let html=dsSummary; let idx=0;
   Object.keys(groups).sort().reverse().forEach(day=>{
     html+=`<section class="daygroup"><h3>${day}</h3>`;
     groups[day].forEach(s=>{ idx++; const c=s.c, M=s.st.metrics, p=c.params||{};
-      const steps=`${c.first_step ?? "?"}→${c.last_step ?? "?"}`; const dur=g(M.duration_min);
+      const steps=`${M.first_step ?? c.first_step ?? "?"}→${M.last_step ?? c.last_step ?? "?"}`; const dur=g(M.recorded_duration_min??M.duration_min);
       const key= s.mode==="charge" ? (M.t190_bed_out_min!=null?`t₁₉₀ ${g(M.t190_bed_out_min)} min · E₂₄₀ ${g(M.E_bed_240_MJ)} MJ`:`E ${g(M.E_bed_air_full_MJ)} MJ`)
                : s.mode==="discharge" ? `峰值 ${g(M.E_rel_peak_MJ)} MJ · t₉₀ ${g(M.t90_min)} min`
                : `t₁₉₀ ${g(M.t190_bed_out_min)} min · η_b ${M.eta_b_240!=null?(100*M.eta_b_240).toFixed(1)+" %":"—"}`;
       const ua=M.UA_eff_median_W_K!=null?`UA_eff ${g(M.UA_eff_median_W_K)}`:(M.eps_actual_median!=null?`ε ${M.eps_actual_median.toFixed(3)}`:"");
       const tags=(c.tags||[]).filter(t=>t!=="legacy").map(t=>`<span class="tag ${t==="baseline"?"b":""}">${t}</span>`).join("")+(c.legacy?'<span class="tag">旧数据</span>':'')+(c.params_source==="override"?'<span class="tag a">参数=覆盖</span>':'')+(c.stages.length>1?'<span class="tag">同运行 '+c.stages.length+' 段</span>':'');
       html+=`<div class="stage-row ${state.libSel===s.id?"sel":""}" data-id="${s.id}">
-        <div>${s.mode==="open"?"":`<input type="checkbox" class="selbox" data-id="${s.id}" ${state.cmpSel.has(s.id)?"checked":""} title="选入对比">`}</div>
+        <div>${isOpen(s)||!playable(s)?"":`<input type="checkbox" class="selbox" data-id="${s.id}" ${state.cmpSel.has(s.id)?"checked":""} title="选入同批次对比">`}</div>
         <div class="idx">${String(idx).padStart(2,"0")}</div>
-        <div><span class="mode-pill ${s.mode}">${MODE_K[s.mode]}</span></div>
-        <div class="par">${stageLabel(s).replace(/^\w+ · /,"")}${s.mode==="open"?"入口 200 °C 直排":""}<small>${c.project||""} / ${c.design_point_dir||""}${c.restart_from_step?" · from"+c.restart_from_step:""}</small><div class="tagline">${tags}</div></div>
+        <div><span class="mode-pill ${isOpen(s)?"open":s.mode}">${isOpen(s)?"开环":""}${MODE_CN[phaseOf(s)]||MODE_K[s.mode]}</span></div>
+        <div class="par">${esc(stageLabel(s).replace(/^\w+ · /,""))}<small>${esc(datasetLabel(datasetId(c)))} · ${esc(c.condition_id||c.project||"")} / ${esc(c.design_point_dir||"")}${c.restart_from_step?" · from"+c.restart_from_step:""}</small><div class="tagline">${tags}${M.phase_status?`<span class="tag ${M.phase_status==="recorded"?"":"a"}">${PHASE_STATUS[M.phase_status]||M.phase_status}</span>`:""}${qualityNotes(s).length?`<span class="tag a" title="${esc(qualityNotes(s).join("；"))}">来源 / 诊断提示 ${qualityNotes(s).length}</span>`:""}</div></div>
         <div class="mono">${steps} · Δt ${g(c.dt_s)} s<br>${dur} min</div>
         <div class="mono">${key}<br>${ua}</div>
         <div><span class="status-badge ${statusClass(M.data_status)}"><span class="d"></span>${M.data_status||"—"}</span></div>
-        <div class="acts"><button class="primary" data-act="play">回放</button><button data-act="detail">详情</button></div>
+        <div class="acts"><button class="primary" data-act="play" ${playable(s)?"":"disabled"}>回放</button><button data-act="detail">详情</button></div>
       </div>`; });
     html+=`</section>`; });
   list.innerHTML=html;
   list.querySelectorAll(".stage-row").forEach(r=>{ r.onclick=(e)=>{ if(e.target.classList.contains("selbox")){ toggleSel(e.target.dataset.id,e.target.checked); return; } const act=e.target.dataset&&e.target.dataset.act; const sid=r.dataset.id;
     if(act==="play"){ loadStage(sid,{keepInfo:true}); go("demo"); return; } state.libSel=sid; go("library",encodeURIComponent(sid)); }; });
 }
-function wfBar(wf){ if(!wf) return '<span class="dim">无㶲瀑布（缺 0–240 min 窗口数据）</span>'; const P=wf.pct;
+function wfBar(wf){ if(!wf) return '<span class="dim">无㶲瀑布（缺对应窗口数据）</span>'; const P=wf.pct;
   return `<div class="wfbar" title="以 E_src 为 100 %"><span class="wf-hxc" style="width:${P.HX_charge}%"></span><span class="wf-bed" style="width:${P.bed_internal}%"></span><span class="wf-hxd" style="width:${P.HX_discharge}%"></span><span class="wf-del" style="width:${P.delivered}%"></span></div>`; }
 const WF_LEGEND='<div class="wflegend"><span><i class="wf-hxc"></i>换热器·充 E_D</span><span><i class="wf-bed"></i>床层内部 + 壁损 + 未放出</span><span><i class="wf-hxd"></i>换热器·放 E_D</span><span><i class="wf-del"></i>交付 E_del</span></div>';
 function renderCycles(){
-  const list=$("#liblist"); $("#libCount").textContent=`${CYCLES.length} 个周期 · 生成 ${LIB.generated_at||"—"}`;
-  if(!CYCLES.length){ list.innerHTML=`<div class="empty">尚无周期。运行 <code>python3 pbtes.py link</code> 后再 <code>export-web</code>；也可用 <code>link --pair CHG DIS</code> 人工指定。</div>`; return; }
-  let html=""; CYCLES.forEach((c,i)=>{ const M=c.metrics, wf=M.waterfall_240||M.waterfall_full; const cs=STAGE_BY_ID[c.charge_stage], ds=STAGE_BY_ID[c.discharge_stage];
+  const list=$("#liblist"), cycles=scopedCycles(); $("#libCount").textContent=`${cycles.length} 个配对周期 · 生成 ${LIB.generated_at||"—"}`;
+  if(!cycles.length){ list.innerHTML=datasetSummary()+`<div class="empty">当前批次没有已登记的充放热配对。各阶段可在上方清单或「阶段」页分别查看；同参数记录不等同于已验证的连续周期，需先核验充热 checkpoint 与放热初始场的来源。</div>`; return; }
+  let html=datasetSummary(); cycles.forEach((c,i)=>{ const M=c.metrics, wf=M.waterfall_full; const cs=STAGE_BY_ID[c.charge_stage], ds=STAGE_BY_ID[c.discharge_stage];
     html+=`<div class="cycle-row ${state.libSel===c.cycle_id?"sel":""}" data-id="${c.cycle_id}">
       <div class="idx">${String(i+1).padStart(2,"0")}</div>
       <div><span class="link-badge ${c.link}">${LINK_CN[c.link]||c.link}</span></div>
-      <div class="par">UA ${g(c.UA_W_K)} W/K · ṁ₂ ${g(c.mdot2_kg_h)} kg/h<small>充 ${cs.date} ${c.charge_case.slice(14)}<br>放 ${ds.date} ${c.discharge_case.slice(14)}</small></div>
+      <div class="par">UA ${g(c.UA_W_K)} W/K · ṁ₂ ${g(c.mdot2_kg_h)} kg/h<small>${esc(datasetLabel(cycleDataset(c)))}<br>充 ${cs.date} ${c.charge_case.slice(14)}<br>放 ${ds.date} ${c.discharge_case.slice(14)}</small></div>
       <div class="mono">净储能 ${g(M.E_net_stored_MJ)} MJ<br>峰值放热 ${g(M.E_rel_peak_MJ)} MJ · 可回收 ${M.recoverable_fraction!=null?(100*M.recoverable_fraction).toFixed(0)+" %":"—"}</div>
-      <div>${wfBar(wf)}<div class="mono" style="margin-top:4px">η_rt ${wf?(100*wf.eta_rt).toFixed(1)+" %":"—"} · η_b 充 ${M.eta_b_charge_240!=null?(100*M.eta_b_charge_240).toFixed(0):"—"} / 放 ${M.eta_b_dis!=null?(100*M.eta_b_dis).toFixed(0):"—"} %</div></div>
+      <div>${wfBar(wf)}<div class="mono" style="margin-top:4px">η_rt（全程） ${wf?(100*wf.eta_rt).toFixed(1)+" %":"—"} · η_b 充 ${(M.eta_b_charge_full??cs.st.metrics.eta_b_full)!=null?(100*(M.eta_b_charge_full??cs.st.metrics.eta_b_full)).toFixed(0):"—"} / 放 ${M.eta_b_dis!=null?(100*M.eta_b_dis).toFixed(0):"—"} %</div></div>
       <div class="acts"><button class="primary" data-act="play">连续回放</button><button data-act="detail">详情</button></div></div>`; });
-  html+=`<p class="dim" style="margin-top:10px;font-size:12px">配对优先级：同一运行 &gt; 续算衔接（放热续算起点 = 充热末步）&gt; 人工指定 &gt; 同参数弱匹配。</p>`;
+  html+=`<p class="dim" style="margin-top:10px;font-size:12px">回放采用阶段相对时间拼接。配对关系、步号匹配或同参数不能单独证明初始场连续；完整周期结论仍需 case/data 与 checkpoint 来源核验。</p>`;
   list.innerHTML=html;
   list.querySelectorAll(".cycle-row").forEach(r=>{ r.onclick=(e)=>{ const act=e.target.dataset&&e.target.dataset.act; const cid=r.dataset.id;
     if(act==="play"){ loadCycle(cid,{keepInfo:true}); go("demo"); return; } state.libSel=cid; go("library","cycle/"+encodeURIComponent(cid)); }; });
@@ -254,12 +293,12 @@ function showCycleDetail(cid){
   $("#dEyebrow").textContent=`CYCLE / ${LINK_CN[c.link]||c.link}`; $("#dTitle").textContent=`UA ${g(c.UA_W_K)} W/K · ṁ₂ ${g(c.mdot2_kg_h)} kg/h 充放周期`; $("#dEn").textContent=c.cycle_id;
   const kv=(pairs)=>`<div class="kv dense">${pairs.filter(([k,v])=>v!=null&&v!=="").map(([k,v])=>`<div>${k}</div><div>${v}</div>`).join("")}</div>`; const pct=v=>v==null?null:(100*v).toFixed(1)+" %";
   const temps=svgLine([{x:d.t,y:d.Tin,color:"#B97708",w:1.8},{x:d.t,y:d.Tout,color:"#E3A83A"},...(d.T2in?[{x:d.t,y:d.T2in,color:"#1264FF",dash:true},{x:d.t,y:d.T2out,color:"#7FA3FF"}]:[])],{title:"四端温度 (°C) · 切换 @ "+g(d.tsw)+" min",xlabel:"min"});
-  const ee=svgLine([{x:d.t,y:d.E,color:"#1264FF",w:1.8}],{title:"床层净储能（充热吸热 − 放热放出）(MJ)",xlabel:"min",ymin:0});
+  const ee=svgLine([{x:d.t,y:d.E,color:"#1264FF",w:1.8}],{title:"累计空气侧净输入（未扣壁损）(MJ)",xlabel:"min",ymin:0});
   const wfRows=(lab,wf)=> wf? [[`E_src（${lab}）`,g(wf.E_src_MJ)+" MJ = 100 %"],["− 换热器·充 E_D",g(wf.HX_charge_destroyed_MJ)+" MJ · "+wf.pct.HX_charge.toFixed(1)+" %"],["− 床层内部 / 壁损 / 未放出",g(wf.bed_internal_MJ)+" MJ · "+wf.pct.bed_internal.toFixed(1)+" %"],["− 换热器·放 E_D",g(wf.HX_discharge_destroyed_MJ)+" MJ · "+wf.pct.HX_discharge.toFixed(1)+" %"],["= 交付 E_del",g(wf.delivered_MJ)+" MJ · "+wf.pct.delivered.toFixed(1)+" %"],["η_rt = E_del / E_src",pct(wf.eta_rt)]] : [];
   $("#dBody").innerHTML=`
-    <div class="sec"><h4>配对</h4>${kv([["方式",(LINK_CN[c.link]||c.link)+(c.needs_confirmation?"（待人工确认）":"")],["充热",`<a href="#library/${encodeURIComponent(c.charge_stage)}">${c.charge_case}</a>`],["放热",`<a href="#library/${encodeURIComponent(c.discharge_stage)}">${c.discharge_case}</a>`],["数据状态",`充 ${c.charge_status||"—"} / 放 ${c.discharge_status||"—"}`],["续算",ds.c.restart_from_step?`放热从第 ${ds.c.restart_from_step} 步续算，充热末步 ${cs.c.last_step}`:null]])}</div>
+    <div class="sec"><h4>配对</h4>${kv([["数据批次",datasetLabel(cycleDataset(c))],["方式",(LINK_CN[c.link]||c.link)+(c.needs_confirmation?"（待人工确认）":"")],["充热",`<a href="#library/${encodeURIComponent(c.charge_stage)}">${c.charge_case}</a>`],["放热",`<a href="#library/${encodeURIComponent(c.discharge_stage)}">${c.discharge_case}</a>`],["数据状态",`充 ${c.charge_status||"—"} / 放 ${c.discharge_status||"—"}`],["续算",ds.c.restart_from_step?`放热从第 ${ds.c.restart_from_step} 步续算，充热末步 ${cs.c.last_step}`:null]])}<div class="note">阶段曲线按相对时间拼接；当前配对信息不代替 checkpoint、case/data 的连续性核验。</div></div>
     <div class="sec"><h4>能量</h4>${kv([["充热 空气侧吸热 / 壁损",g(M.E_bed_air_charge_MJ)+" / "+g(M.E_wall_charge_MJ)+" MJ"],["净储能 E_net",g(M.E_net_stored_MJ)+" MJ"],["峰值放热 E_rel,peak",g(M.E_rel_peak_MJ)+" MJ @ "+g(M.t_peak_min)+" min"],["可回收比例 E_rel,peak / E_net",pct(M.recoverable_fraction)],["闭合度 (E_rel,peak + 壁损_放) / E_net",pct(M.closure_peak_plus_wall_over_net)],["床层均温 充末 → 放始",g(M.T_bed_end_charge_C)+" → "+g(M.T_bed_start_discharge_C)+" °C"],["时长 充 / 放",g(M.charge_duration_min)+" / "+g(M.discharge_duration_min)+" min"],["t₁₉₀（充）/ t₉₀（放）",g(M.t190_min)+" / "+g(M.t90_dis_min)+" min"],["T₂,out 放热最高",g(M.T2out_max_C)+" °C"]])}</div>
-    <div class="sec"><h4>㶲瀑布（小论文口径：充热 0–240 min）</h4>${wfBar(M.waterfall_240)}${WF_LEGEND}${kv(wfRows("0–240 min",M.waterfall_240))}${M.waterfall_full?`<p class="dim" style="margin-top:8px">充热全程口径：η_rt ${pct(M.waterfall_full.eta_rt)}（E_src ${g(M.waterfall_full.E_src_MJ)} MJ）</p>`:""}<p class="dim" style="margin-top:6px">η_b 充 ${pct(M.eta_b_charge_240)||"—"} · η_b 放 ${pct(M.eta_b_dis)||"—"}；η_rt ≠ η_b,充 × η_b,放，差额即床层内部不可逆 + 壁损 + 峰值后未放出部分。</p></div>
+    <div class="sec"><h4>㶲瀑布（全充热程 → 放热峰值）</h4>${wfBar(M.waterfall_full)}${WF_LEGEND}${kv(wfRows("全充热程",M.waterfall_full))}<p class="dim" style="margin-top:6px">η_b 全程充 ${pct(M.eta_b_charge_full??cs.st.metrics.eta_b_full)||"—"} · η_b 放 ${pct(M.eta_b_dis)||"—"}；使用实际充热全程的热源㶲作为往返效率分母。</p>${M.waterfall_240?`<p class="dim" style="margin-top:8px">历史 240 min 分母口径：${pct(M.waterfall_240.eta_rt)}。若充热超过 240 min，此比值仅供旧论文对照，不能代表完整周期效率。</p>`:""}</div>
     <div class="sec"><h4>曲线</h4>${legend([{color:"#B97708",label:"床层入口"},{color:"#E3A83A",label:"床层出口"},...(d.T2in?[{color:"#1264FF",label:"T₂,in"},{color:"#7FA3FF",label:"T₂,out"}]:[])])}${temps}${ee}</div>`;
   $("#dActions").innerHTML=`<button class="primary" id="actPlay">连续回放</button><button id="actCopy">复制 cycle_id</button>`; $("#dActions").classList.add("on");
   $("#actPlay").onclick=()=>{ loadCycle(cid,{keepInfo:true}); go("demo"); };
@@ -274,14 +313,15 @@ function updateSelbar(){ const ids=Array.from(state.cmpSel); const ms=ids.map(id
 $("#selClear").onclick=()=>{ state.cmpSel.clear(); renderLibrary(); };
 $("#selCompare").onclick=()=>{ const ms=Array.from(state.cmpSel).map(id=>STAGE_BY_ID[id]).filter(Boolean); const c=buildAdhoc(ms); if(!c) return; state.adhoc=c; state.libTab="compare"; state.libSel="adhoc"; go("library","cmp/adhoc"); };
 
-/* ---------------------------------------------------------------- 对比：准入与即时计算（与 pbtes/compare.py 同规则，基于 120 点降采样） */
+/* ---------------------------------------------------------------- 对比：准入与即时计算（新批次完整采样，历史曲线可能降采样） */
 function memberOf(s){ const p=s.c.params||{}, M=s.st.metrics; const t2=(s.st.series.t2in_C||[]).find(v=>v!=null) ?? p.T2in_C;
-  return { stage_id:s.id, case_id:s.c.case_id, index:s.st.index||0, mode:s.mode, run_datetime:s.c.run_datetime, project:s.c.project, dt_s:s.c.dt_s, restart_from_step:s.c.restart_from_step, t_start_s:M.t_start_s, legacy:!!s.c.legacy,
+  return { stage_id:s.id, case_id:s.c.case_id, dataset:datasetId(s.c), open_loop:isOpen(s), index:s.st.index||0, mode:s.mode, run_datetime:s.c.run_datetime, project:s.c.project, dt_s:s.c.dt_s, restart_from_step:s.c.restart_from_step, t_start_s:M.t_start_s, legacy:!!s.c.legacy,
     UA_W_K:p.UA_W_K??null, mdot2_kg_h:p.mdot2_kg_h??null, mdot1_kg_h:p.mdot1_kg_h||40, T2in_C:t2==null?null:Math.round(t2), Cr:p.Cr, NTU:p.NTU, eps_theory:p.eps_theory,
     data_status:M.data_status, reliable:/^(参数吻合|不可辨识)/.test(M.data_status||""), metrics:M, _s:s }; }
 function admit(ms){
   if(ms.length<2) return {ok:false,reason:"至少需要两个阶段"};
-  if(ms.some(m=>m.mode==="open")) return {ok:false,reason:"开环阶段无 UA / ṁ₂，不能与闭环对比"};
+  if(new Set(ms.map(m=>m.dataset)).size>1) return {ok:false,reason:"请在同一数据批次内对比，历史数据与重测数据分别统计"};
+  if(ms.some(m=>m.open_loop||m.mode==="open")) return {ok:false,reason:"开环阶段无 UA / ṁ₂，使用同批次开环基准参考线"};
   const modes=new Set(ms.map(m=>m.mode)); if(modes.size>1) return {ok:false,reason:"模式不同（"+Array.from(modes).map(m=>MODE_CN[m]).join(" / ")+"）"};
   const t2=new Set(ms.map(m=>m.T2in_C)); if(t2.size>1) return {ok:false,reason:"T₂,in 不同（"+Array.from(t2).map(g).join(" / ")+" °C）"};
   const m1=new Set(ms.map(m=>m.mdot1_kg_h)); if(m1.size>1) return {ok:false,reason:"一次侧 ṁ₁ 不同"};
@@ -298,12 +338,12 @@ function interp(x,y,q){ // x ascending, y may contain null
 function stat(d){ const v=d.filter(x=>x!=null); if(!v.length) return null; let mx=0,imx=0,s2=0,sa=0,sb=0; v.forEach((x,i)=>{ if(Math.abs(x)>mx){mx=Math.abs(x);imx=i;} s2+=x*x; sa+=Math.abs(x); sb+=x; }); return {rmse:Math.sqrt(s2/v.length),mae:sa/v.length,max_abs:mx,imx,bias:sb/v.length,n:v.length}; }
 function buildAdhoc(stages){
   const ms=stages.map(memberOf); const a=admit(ms); if(!a.ok){ alert("不能对比："+a.reason); return null; }
-  const c={cmp_id:"adhoc",type:a.type,type_cn:TYPE_CN[a.type],admission:a.reason,mode:ms[0].mode,T2in_C:ms[0].T2in_C,adhoc:true,created_at:new Date().toISOString().slice(0,16).replace("T"," "),
+  const c={cmp_id:"adhoc",dataset:ms[0].dataset,type:a.type,type_cn:TYPE_CN[a.type],admission:a.reason,mode:ms[0].mode,T2in_C:ms[0].T2in_C,adhoc:true,created_at:new Date().toISOString().slice(0,16).replace("T"," "),
     members:ms.map(m=>({stage_id:m.stage_id,case_id:m.case_id,run_datetime:m.run_datetime,project:m.project,dt_s:m.dt_s,UA_W_K:m.UA_W_K,mdot2_kg_h:m.mdot2_kg_h,T2in_C:m.T2in_C,data_status:m.data_status,reliable:m.reliable,legacy:m.legacy}))};
   if(a.type==="replicate"){
     const sorted=ms.slice().sort((x,y)=>(x.run_datetime||"").localeCompare(y.run_datetime||"")); const ref=sorted[0];
     const physical=ms.every(m=>m.index===0&&!m.restart_from_step); const sign=ms[0].mode==="discharge"?-1:1;
-    const T=m=>{ const S=m._s.st.series; const off=physical?(m.t_start_s||0)/60:0; return S.tau_min.map(v=>v+off); };
+    const T=m=>physical?physicalTimes(m._s):m._s.st.series.tau_min;
     const t0=Math.max(...ms.map(m=>T(m)[0])), t1=Math.min(...ms.map(m=>{const t=T(m); return t[t.length-1];})); const N=200; const grid=Array.from({length:N},(_,i)=>t0+(t1-t0)*i/(N-1));
     const VARS=[["bed_out_C","床层出口温度","K"],["bed_in_C","床层入口温度","K"],["t2out_C","T₂,out","K"],["q_bed_W","Q_bed","W"],["e_bed_MJ","E_bed 累计","MJ"]];
     const R={}; VARS.forEach(([v])=>{ if(ref._s.st.series[v]) R[v]=interp(T(ref),ref._s.st.series[v],grid); });
@@ -327,7 +367,7 @@ function buildAdhoc(stages){
     if(rel.length>=2){ const d=rel.slice(1).map((r,i)=>r.eta_b-rel[i].eta_b); const p=x=>(100*x).toFixed(1);
       if(d.every(x=>x>0)) trend=`η_b 随 ${xn} 单调上升（${p(rel[0].eta_b)} → ${p(rel[rel.length-1].eta_b)} %）`; else if(d.every(x=>x<0)) trend=`η_b 随 ${xn} 单调下降（${p(rel[0].eta_b)} → ${p(rel[rel.length-1].eta_b)} %）`; else { let i=0; rel.forEach((r,k)=>{ if(r.eta_b>rel[i].eta_b) i=k; }); trend=`η_b 非单调，最高在 ${xn} = ${g(rel[i].x)}（${p(rel[i].eta_b)} %）`; }
       trend+=`；可靠成员间极差 ${(100*(Math.max(...rel.map(r=>r.eta_b))-Math.min(...rel.map(r=>r.eta_b)))).toFixed(1)} pt`; }
-    let ro=null; if(ms[0].mode==="charge"){ const o=STAGES.find(s=>s.mode==="open"&&Math.abs((s.st.metrics.bed_in_start_C||0)-(ms[0].T2in_C||200))<10); if(o) ro={stage_id:o.id,case_id:o.c.case_id,eta_b_240:o.st.metrics.eta_b_240,t190_bed_out_min:o.st.metrics.t190_bed_out_min,E_bed_240_MJ:o.st.metrics.E_bed_240_MJ}; }
+    let ro=null; if(ms[0].mode==="charge"){ const o=STAGES.find(s=>s.mode==="open"&&datasetId(s.c)===ms[0].dataset&&Math.abs((s.st.metrics.bed_in_start_C||0)-(ms[0].T2in_C||200))<10); if(o) ro={stage_id:o.id,case_id:o.c.case_id,eta_b_240:o.st.metrics.eta_b_240,t190_bed_out_min:o.st.metrics.t190_bed_out_min,E_bed_240_MJ:o.st.metrics.E_bed_240_MJ}; }
     c.eta={varying:v,eta_key:ek,rows,trend,excluded_from_trend:rows.filter(r=>!r.reliable).map(r=>r.stage_id),reference_open:ro};
   }
   return c;
@@ -336,11 +376,11 @@ function buildAdhoc(stages){
 /* ---------------------------------------------------------------- 对比：列表与详情 */
 function cmpSummary(c){ if(c.type==="replicate"){ const e=c.error; return `<span class="verdict ${e.level}">${e.verdict}</span> <span class="mono dim">ΔT_out ${g(e.criteria.max_abs_dT_out_K)} K · Δη_b ${(100*(e.criteria.max_abs_d_eta_b||0)).toFixed(2)} pt · ΔE ${g(e.criteria.max_abs_dE_rel_pct)} %</span>`; } return `<span class="dim">${c.eta.trend||"可靠成员不足，无趋势"}</span>`; }
 function renderComparisons(){
-  const list=$("#liblist"); const all=(state.adhoc?[state.adhoc]:[]).concat(COMPARISONS); $("#libCount").textContent=`${COMPARISONS.length} 个已保存对比${state.adhoc?" + 1 个即时":""} · 生成 ${LIB.generated_at||"—"}`;
-  if(!all.length){ list.innerHTML=`<div class="empty">尚无对比。在「阶段」标签勾选 2 个以上阶段后点「对比所选」即时对比；或在 Mac 运行 <code>python3 pbtes.py compare --auto</code> 生成并保存全部可准入对比，再 <code>export-web</code>。</div>`; return; }
-  const groups=[["replicate","重复性 / 误差分析"],["param_m2","同 ṁ₂ · UA 变化 → η_b"],["param_ua","同 UA · ṁ₂ 变化 → η_b"]]; let html="";
-  if(state.adhoc){ html+=`<section class="daygroup"><h3>即时对比（未保存）</h3>${cmpRow(state.adhoc,0)}</section>`; }
-  groups.forEach(([t,cn])=>{ const rows=COMPARISONS.filter(c=>c.type===t); if(!rows.length) return; html+=`<section class="daygroup"><h3>${cn} <span class="k" style="font-family:var(--mono);font-size:10px;color:var(--muted)">${rows.length}</span></h3>`; rows.forEach((c,i)=>{ html+=cmpRow(c,i+1); }); html+=`</section>`; });
+  const list=$("#liblist"), saved=scopedComparisons(), adhoc=state.adhoc&&inDataset(cmpDataset(state.adhoc))?state.adhoc:null; const all=(adhoc?[adhoc]:[]).concat(saved); $("#libCount").textContent=`${saved.length} 个已保存对比${adhoc?" + 1 个即时":""} · 生成 ${LIB.generated_at||"—"}`;
+  if(!all.length){ list.innerHTML=datasetSummary()+`<div class="empty">当前批次暂无对比。在「阶段」标签勾选同一批次的 2 个以上闭环阶段后，可即时比较单一参数的影响。</div>`; return; }
+  const groups=[["replicate","重复性 / 误差分析"],["param_m2","同 ṁ₂ · UA 变化 → η_b"],["param_ua","同 UA · ṁ₂ 变化 → η_b"]]; let html=datasetSummary();
+  if(adhoc){ html+=`<section class="daygroup"><h3>即时对比（未保存）</h3>${cmpRow(adhoc,0)}</section>`; }
+  groups.forEach(([t,cn])=>{ const rows=saved.filter(c=>c.type===t); if(!rows.length) return; html+=`<section class="daygroup"><h3>${cn} <span class="k" style="font-family:var(--mono);font-size:10px;color:var(--muted)">${rows.length}</span></h3>`; rows.forEach((c,i)=>{ html+=cmpRow(c,i+1); }); html+=`</section>`; });
   html+=`<p class="dim" style="margin-top:10px;font-size:12px">准入规则：只允许 ① 全部参数相同（重复性 / 误差分析）② 仅 UA 或仅 ṁ₂ 不同（η_b 对比）。η_b 趋势只统计状态为「参数吻合 / 不可辨识」的可靠成员。</p>`;
   list.innerHTML=html;
   list.querySelectorAll(".cmp-row").forEach(r=>{ r.onclick=()=>{ const id=r.dataset.id; state.libSel=id; go("library","cmp/"+encodeURIComponent(id)); }; });
@@ -370,7 +410,7 @@ function showCompareDetail(c){
     const tbl=`<table class="mini"><tr><th>vs 基准</th><th>ΔT_out max</th><th>RMSE</th><th>ΔT_in max</th><th>ΔT₂,out max</th><th>ΔE 末端</th><th>Δη_b</th><th>${isDis?"Δt_peak":"Δt₁₉₀"}</th></tr>${others.map(r=>{ const so=r.series.bed_out_C||{}, si=r.series.bed_in_C||{}, s2=r.series.t2out_C||{}; const x=ms.find(y=>y.m.stage_id===r.stage_id);
       return `<tr><td><i class="swatch" style="background:${x?x.color:"#999"}"></i>${(r.stage_id||"").slice(0,13)}${r.identical_to_ref?' <span class="tag">逐点相同</span>':""}</td><td>${g(so.max_abs)} K<br><span class="dim">@${g(so.t_max_abs_min)} min</span></td><td>${g(so.rmse)} K</td><td>${g(si.max_abs)} K</td><td>${s2.max_abs!=null?g(s2.max_abs)+" K":"—"}</td><td>${sgn(r.metrics.E_at_common_end_MJ.rel_pct)} %</td><td>${sgn(r.metrics[ek].delta==null?null:100*r.metrics[ek].delta)} pt</td><td>${sgn(r.metrics[isDis?"t_peak_min":"t190_bed_out_min"].delta,1)} min</td></tr>`; }).join("")}</table>`;
     // 曲线：床层出口叠加 + 相对基准的差值
-    const physical=e.time_base==="physical"; const T=x=>{ const S=x.s.st.series; const off=physical?((x.s.st.metrics.t_start_s||0)/60):0; return S.tau_min.map(v=>v+off); };
+    const physical=e.time_base==="physical"; const T=x=>physical?physicalTimes(x.s):x.s.st.series.tau_min;
     const over=svgLine(ms.map(x=>({x:T(x),y:x.s.st.series.bed_out_C,color:x.color,w:x.m.stage_id===e.ref?2:1.4,dash:x.m.stage_id!==e.ref&&false})),{title:"床层出口温度叠加 (°C)",xlabel:"min"});
     const grid=Array.from({length:160},(_,i)=>e.common_start_min+(e.common_end_min-e.common_start_min)*i/159); const R=refM?interp(T(refM),refM.s.st.series.bed_out_C,grid):null;
     const dser=R?ms.filter(x=>x.m.stage_id!==e.ref).map(x=>{ const y=interp(T(x),x.s.st.series.bed_out_C,grid); return {x:grid,y:y.map((v,i)=>(v==null||R[i]==null)?null:v-R[i]),color:x.color}; }):[];
@@ -386,21 +426,23 @@ function showCompareDetail(c){
       :`<table class="mini"><tr><th>${xn}</th><th>η_b</th><th>E_src / E_gain / E_D</th><th>t₁₉₀</th><th>E₂₄₀</th><th>C_r / NTU / ε</th><th>UA_eff</th></tr>${r.rows.map(x=>{ const d=x.detail||{}; return `<tr class="${x.reliable?"":"unrel"}"><td>${g(x.x)}</td><td><b>${pct(x.eta_b)}</b></td><td>${g(d.Ex_src_240_MJ)} / ${g(d.Ex_gain_240_MJ)} / ${g(d.Ex_D_HX_240_MJ)}</td><td>${d.t190_bed_out_min!=null?g(d.t190_bed_out_min)+" min":"未到"}</td><td>${g(d.E_bed_240_MJ)} MJ</td><td>${g(x.Cr)} / ${g(x.NTU)} / ${g(x.eps_theory)}</td><td>${g(d.UA_eff_median_W_K)}</td></tr>`; }).join("")}</table>`;
     body+=`<div class="sec"><h4>η_b 对比</h4>${bars}<p style="margin-top:6px"><b>${r.trend||"可靠成员不足，无趋势"}</b></p>${r.excluded_from_trend.length?`<p class="dim" style="margin-top:4px">灰色柱不计入趋势（状态非「参数吻合 / 不可辨识」）：${r.excluded_from_trend.map(id=>id.slice(0,13)).join("、")}</p>`:""}${r.reference_open?`<p class="dim" style="margin-top:4px">虚线为开环基准 <a href="#library/${encodeURIComponent(r.reference_open.stage_id)}">${r.reference_open.case_id.slice(0,13)}</a>：η_b ${pct(r.reference_open.eta_b_240)}，t₁₉₀ ${g(r.reference_open.t190_bed_out_min)} min。</p>`:""}</div>
       <div class="sec"><h4>成员指标</h4><div class="tblwrap">${tbl}</div></div>
-      <div class="sec"><h4>如何读</h4><p class="dim">η_b = E_gain / E_src（充热，0–240 min）或 E_del / E_rel（放热，到峰值）；只看换热器边界的㶲得失，不含床层内部与壁损。同一 ${r.varying==="UA_W_K"?"ṁ₂":"UA"} 下比较，差异即 ${xn.split(" ")[0]} 改变导致的换热器不可逆程度变化：C_r 偏离 1、NTU 变化都会体现在 ε 与 η_b 上。</p></div>`;
+      <div class="sec"><h4>如何读</h4><p class="dim">η_b = E_gain / E_src（充热，至240 min）或 E_del / E_rel（放热，到峰值）；仅描述相应边界的㶲变化，未扣辅机耗功，也不代表PCM储㶲效率。观测差异需结合初始场、时间窗口、阶段终点与UDF诊断状态解释。</p></div>`;
     if(c.alternates&&Object.keys(c.alternates).length){ body+=`<div class="sec"><h4>同参数的其他运行（未选为代表）</h4><p class="dim">${Object.entries(c.alternates).map(([k,v])=>`${k.slice(0,13)} ← ${v.map(x=>x.slice(0,13)).join("、")}`).join("<br>")}</p></div>`; }
   }
-  if(c.adhoc){ const ids=c.members.map(m=>m.stage_id); body+=`<div class="sec"><h4>保存为正式对比</h4><p class="dim">即时对比基于 120 点降采样；在 Mac 上运行下面命令可用全分辨率数据计算并保存，之后 <code>export-web</code>：</p><div class="cli">python3 pbtes.py compare ${ids.map(x=>'"'+x+'"').join(" ")}</div></div>`; }
+  if(c.adhoc){ const ids=c.members.map(m=>m.stage_id); body+=`<div class="sec"><h4>保存为正式对比</h4><p class="dim">${samplingNote}即时比较使用网页已载入的数据；运行下面命令可基于原报告计算并保存，再执行 <code>export-web</code>：</p><div class="cli">python3 pbtes.py compare ${ids.map(x=>'"'+x+'"').join(" ")}</div></div>`; }
+  if(c.dataset==="retest-2026-10") body=`<div class="sec"><a class="btn primary" href="#research/${encodeURIComponent(c.cmp_id)}">完整指标比较 · 温度 / 功率 / 热量 / 交付 / 㶲</a><p class="dim">按共同时间窗口计算，保留诊断和缺失状态。</p></div>`+body;
   $("#dBody").innerHTML=body;
   $("#dActions").innerHTML=`<button class="primary" id="actPlayFirst">回放第一个成员</button><button id="actCopy">复制 ${c.adhoc?"命令":"cmp_id"}</button>`; $("#dActions").classList.add("on");
   $("#actPlayFirst").onclick=()=>{ loadStage(c.members[0].stage_id,{keepInfo:true}); go("demo"); };
   $("#actCopy").onclick=()=>{ const txt=c.adhoc?`python3 pbtes.py compare ${c.members.map(m=>'"'+m.stage_id+'"').join(" ")}`:c.cmp_id; navigator.clipboard&&navigator.clipboard.writeText(txt); $("#actCopy").textContent="已复制"; setTimeout(()=>$("#actCopy").textContent="复制 "+(c.adhoc?"命令":"cmp_id"),1200); };
 }
 function showLibraryHome(){
-  $("#dEyebrow").textContent="LIBRARY / 数据库"; $("#dTitle").textContent=state.libTab==="cycles"?"选择一个周期查看详情":state.libTab==="compare"?"选择一个对比查看详情":"选择一个阶段查看详情（勾选可多选对比）"; $("#dEn").textContent=`${LIB.cases.length} cases · ${STAGES.length} stages · ${CYCLES.length} cycles · ${COMPARISONS.length} comparisons`;
-  const byStatus={}; STAGES.forEach(s=>{ const k=s.st.metrics.data_status||"—"; byStatus[k]=(byStatus[k]||0)+1; });
-  $("#dBody").innerHTML=`<div class="sec"><h4>数据状态分布</h4><div class="kv">${Object.entries(byStatus).map(([k,v])=>`<div><span class="status-badge ${statusClass(k)}"><span class="d"></span>${k}</span></div><div>${v}</div>`).join("")}</div></div>
-    <div class="sec"><h4>状态含义</h4><ul class="list"><li><b>参数吻合</b>：UA_eff / 输入 UA 在 0.8–1.25 之间。</li><li><b>有效 UA 偏低（数值分支）</b>：UDF Newton 非目标收敛分支，只作数值稳定性案例。</li><li><b>不可辨识（ε≈1）</b>：效能接近 1，LMTD≈0，无法反算 UA，参数按输入值使用。</li><li><b>开环基准</b>：入口恒温、出口直排。</li></ul></div>
-    <div class="sec"><h4>口径</h4><p class="dim">W = ṁ·c_p，c_p = 1007 J/(kg·K)，T₀ = 298.15 K；充热㶲窗口 0–240 min，放热到空气侧放热峰值；切换/续算后前 3 步为瞬态跳过；E_bed 含壁面散热（k ≈ 0.23 W/K）。</p></div>`;
+  const stages=scopedStages();
+  $("#dEyebrow").textContent="LIBRARY / 数据库"; $("#dTitle").textContent=state.libTab==="cycles"?"选择一个配对查看详情":state.libTab==="compare"?"选择一个对比查看详情":"选择一个阶段查看详情"; $("#dEn").textContent=`${state.filters.dataset?datasetLabel(state.filters.dataset):"全部批次"} · ${stages.length} stages · ${scopedCycles().length} cycles · ${scopedComparisons().length} comparisons`;
+  const byStatus={}; stages.forEach(s=>{ const k=s.st.metrics.data_status||"—"; byStatus[k]=(byStatus[k]||0)+1; });
+  $("#dBody").innerHTML=`<div class="sec"><h4>当前批次</h4><p>${esc(state.filters.dataset?datasetLabel(state.filters.dataset):"全部批次")}</p><p class="dim">可切换「数据集」查看原有历史数据。各批次单独生成对比，充放热阶段的记录状态与计算完成状态分别标注。</p></div><div class="sec"><h4>数据状态分布</h4><div class="kv">${Object.entries(byStatus).map(([k,v])=>`<div><span class="status-badge ${statusClass(k)}"><span class="d"></span>${esc(k)}</span></div><div>${v}</div>`).join("")}</div></div>
+    <div class="sec"><h4>状态含义</h4><ul class="list"><li><b>参数吻合</b>：UA_eff / 输入 UA 在 0.8–1.25 之间，仅表示所列边界反推检查符合阈值。</li><li><b>有效 UA 偏低</b>：需结合实际边界、加载 UDF 和数值状态核查；历史数值分支见对应记录。</li><li><b>不可辨识（ε≈1）</b>：边界温差过小等情况使 UA 反推病态；不表示全阶段实际 ε 等于 1，也不直接证明 UDF 失效。输入参数仍需投算源码、加载库与 HX 诊断核验。</li><li><b>开环基准</b>：入口恒温、出口直排。</li></ul></div>
+    <div class="sec"><h4>口径</h4><p class="dim">W = ṁ·c_p，c_p = 1007 J/(kg·K)，T₀ = 298.15 K。历史分析保留原指标；重测研究比较采用共同记录窗口，并分别显示放热累计峰值和终值，不补未记录的初始区间。胶囊内部温度来自 point-t1-s，测点均值不等同于全域体积平均温度。新批次日期按文件 mtime 归档；${samplingNote}报告记录不单独证明相变完成或周期连续性。</p></div>`;
   $("#dActions").innerHTML=""; $("#dActions").classList.remove("on");
 }
 
@@ -408,7 +450,8 @@ function showLibraryHome(){
 function svgLine(series, o){
   const W=o.width||356, H=o.height||150, ml=40, mr=10, mt=20, mb=24; const iw=W-ml-mr, ih=H-mt-mb;
   let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
-  series.forEach(s=>s.x.forEach((x,i)=>{ const y=s.y[i]; if(y==null||x==null) return; xmin=Math.min(xmin,x); xmax=Math.max(xmax,x); ymin=Math.min(ymin,y); ymax=Math.max(ymax,y); }));
+  series=series.filter(s=>Array.isArray(s.x)&&Array.isArray(s.y));
+  series.forEach(s=>s.x.forEach((x,i)=>{ const y=s.y[i]; if(y==null||x==null||!Number.isFinite(x)||!Number.isFinite(y)) return; xmin=Math.min(xmin,x); xmax=Math.max(xmax,x); ymin=Math.min(ymin,y); ymax=Math.max(ymax,y); }));
   if(!(xmax>xmin)) return "";
   if(o.ymin!=null) ymin=Math.min(ymin,o.ymin); if(ymax-ymin<1e-9){ ymax=ymin+1; } const pad=(ymax-ymin)*0.06; ymin-=pad; ymax+=pad;
   const X=x=>ml+(x-xmin)/(xmax-xmin)*iw, Y=y=>mt+ih-(y-ymin)/(ymax-ymin)*ih;
@@ -419,35 +462,59 @@ function svgLine(series, o){
   ticks(xmin,xmax,5).forEach(v=>{ svg+=`<text x="${X(v)}" y="${H-8}" text-anchor="middle">${g(v)}</text>`; });
   svg+=`<line class="ax" x1="${ml}" x2="${W-mr}" y1="${mt+ih}" y2="${mt+ih}"/><line class="ax" x1="${ml}" x2="${ml}" y1="${mt}" y2="${mt+ih}"/>`;
   svg+=`<text x="${W-mr}" y="${H-8}" text-anchor="end" style="fill:var(--text2)">${o.xlabel||""}</text>`;
-  series.forEach(s=>{ let d="",pen=false; s.x.forEach((x,i)=>{ const y=s.y[i]; if(y==null||x==null){pen=false;return;} d+=(pen?"L":"M")+X(x).toFixed(1)+" "+Y(y).toFixed(1); pen=true; }); svg+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w||1.6}" ${s.dash?'stroke-dasharray="4 3"':""}/>`; });
+  series.forEach(s=>{ let d="",pen=false; s.x.forEach((x,i)=>{ const y=s.y[i]; if(s.breaks&&s.breaks.has(i)) pen=false; if(y==null||x==null||!Number.isFinite(x)||!Number.isFinite(y)){pen=false;return;} d+=(pen?"L":"M")+X(x).toFixed(1)+" "+Y(y).toFixed(1); pen=true; }); svg+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w||1.6}" ${s.dash?'stroke-dasharray="4 3"':""}/>`; });
   return svg+"</svg>";
 }
 function niceStep(raw){ const p=Math.pow(10,Math.floor(Math.log10(raw))); const r=raw/p; return (r<1.5?1:r<3?2:r<7?5:10)*p; }
 function legend(items){ return `<div class="chart-legend">${items.map(i=>`<span><i style="background:${i.color}"></i>${i.label}</span>`).join("")}</div>`; }
+function pcmChartSection(s){
+  const S=s.st.series, probes=Array.from({length:12},(_,i)=>"pcm_probe_"+String(i+1).padStart(2,"0")+"_C").filter(k=>hasValues(S[k]));
+  if(!hasValues(S.pcm_mean_C)&&!probes.length) return `<div class="sec"><h4>胶囊内部温度</h4><p class="dim">此阶段没有可读取的胶囊内部测点记录，不能用床层出口温度代替。</p></div>`;
+  return `<div class="sec"><h4>胶囊内部温度</h4><label class="chart-control" for="pcmMetric">显示<select id="pcmMetric">${hasValues(S.pcm_mean_C)?'<option value="summary">测点均值与最小 / 最大值</option>':""}${probes.length?'<option value="all">全部内部测点</option>':""}${probes.map(k=>`<option value="${k}">${esc(probeName(s,k))}</option>`).join("")}</select></label><div id="pcmChart"></div><p class="dim">point-t1-s 测点温度（°C）；均值与范围均基于现有测点，不代表全域温度或液相率。${timeAxisNote(s)}${samplingNote}</p></div>`;
+}
+function renderPcmChart(s){
+  const el=$("#pcmMetric"), target=$("#pcmChart"); if(!el||!target) return; const R=researchStage(s), S=R?R.series:s.st.series, x=S.tau_min||[], breaks=new Set((R?.gaps||[]).map(g=>g.before_index));
+  const series=el.value==="summary"?[["pcm_mean_C","测点均值","#1264FF",false],["pcm_min_C","测点最小值","#7FA3FF",true],["pcm_max_C","测点最大值","#B97708",true]]:el.value==="all"?Array.from({length:12},(_,i)=>{const k="pcm_probe_"+String(i+1).padStart(2,"0")+"_C";return [k,esc(probeName(s,k)),PALETTE[i%PALETTE.length],false];}):[[el.value,esc(probeName(s,el.value)),"#1264FF",false]];
+  const available=series.filter(([k])=>hasValues(S[k])); target.innerHTML=legend(available.map(([k,label,color])=>({label,color})))+svgLine(available.map(([k,label,color,dash])=>({x,y:S[k],color,dash,breaks,w:k==="pcm_mean_C"?2:1.4})),{title:"胶囊内部温度 (°C)",xlabel:"min"});
+  el.onchange=()=>renderPcmChart(s);
+}
 
 /* ---------------------------------------------------------------- 阶段详情 */
 function showStageDetail(sid){
-  const s=STAGE_BY_ID[sid]; if(!s) return; const c=s.c, M=s.st.metrics, p=c.params||{}, S=s.st.series, dc=c.data_check||{};
+  const s=STAGE_BY_ID[sid]; if(!s) return; const c=s.c, M=s.st.metrics, p=c.params||{}, S=s.st.series, dc=c.data_check||{}, R=researchStage(s), RS=R?R.series:S, breaks=new Set((R?.gaps||[]).map(g=>g.before_index));
   renderLibrary();
-  $("#dEyebrow").textContent=`CASE / ${MODE_K[s.mode]} · ${c.project||""} / ${c.design_point_dir||""}`; $("#dTitle").textContent=stageLabel(s).replace(/^\w+ · /,"")+(s.mode==="open"?"开环基准":"");
+  $("#dEyebrow").textContent=`CASE / ${phaseLabel(s)} · ${datasetLabel(datasetId(c))}`; $("#dTitle").textContent=stageLabel(s).replace(/^\w+ · /,"");
   $("#dEn").textContent=c.case_id;
   const kv=(pairs)=>`<div class="kv dense">${pairs.filter(([k,v])=>v!==undefined&&v!==null&&v!=="").map(([k,v])=>`<div>${k}</div><div>${v}</div>`).join("")}</div>`;
   const pct=v=>v==null?null:(100*v).toFixed(1)+" %";
-  const temps=svgLine([{x:S.tau_min,y:S.bed_in_C,color:"#B97708",w:1.8},{x:S.tau_min,y:S.bed_out_C,color:"#E3A83A"},...(S.t2in_C?[{x:S.tau_min,y:S.t2in_C,color:"#1264FF",dash:true},{x:S.tau_min,y:S.t2out_C,color:"#7FA3FF"}]:[])],{title:"四端温度 (°C)",xlabel:"min"});
-  const qe=svgLine([{x:S.tau_min,y:S.q_bed_W.map(v=>v==null?null:(s.mode==="discharge"?-v:v)/1000),color:"#101827"}],{title:(s.mode==="discharge"?"床层放热功率 (kW)":"床层吸热功率 Q_bed (kW)"),xlabel:"min",ymin:0});
-  const ee=svgLine([{x:S.tau_min,y:S.e_bed_MJ.map(v=>v==null?null:(s.mode==="discharge"?-v:v)),color:"#1264FF",w:1.8},{x:S.tau_min,y:S.e_wall_MJ,color:"#8490A3",dash:true}],{title:(s.mode==="discharge"?"累计放热":"累计吸热")+" 与壁损估计 (MJ)",xlabel:"min",ymin:0});
+  const diag=!isOpen(s)&&(p.solver_version||M.hx_diagnostics_present)?`<div class="sec"><h4>UDF 诊断检查</h4>${kv([["求解器版本",p.solver_version],["几何换算系数",p.geometry_factor],["检查状态 / 稳定样本数",(M.hx_diagnostics_status||"未检查")+" / "+(M.hx_diagnostics_stable_points??0)],["耦合误差最大值",M.hx_coupling_abs_max_K!=null?fmt(M.hx_coupling_abs_max_K,5)+" K":null],["实际入口与目标最大偏差",M.hx_boundary_target_abs_max_K!=null?fmt(M.hx_boundary_target_abs_max_K,5)+" K":null],["流量误差最大值",M.hx_mass_error_abs_max_pct!=null?fmt(M.hx_mass_error_abs_max_pct,3)+" %":null],["能量误差最大值（全段）",M.hx_energy_error_abs_max_pct!=null?fmt(M.hx_energy_error_abs_max_pct,3)+" %":null],["能量误差最大值（稳定段）",M.hx_energy_error_stable_abs_max_pct!=null?fmt(M.hx_energy_error_stable_abs_max_pct,3)+" %":null],["稳定段能量误差 > 0.5% 点数",M.hx_energy_bad_count],["回流比例最大值",M.hx_backflow_max_fraction!=null?fmt(100*M.hx_backflow_max_fraction,4)+" %":null]])}<p class="dim">阶段有效时间超过 8 min 后逐点检查：耦合误差 ≤ 0.05 K、流量与能量误差 ≤ 0.5%、回流比例 ≤ 0.1%；版本、闭环状态和有效标志须一致。统计基于原始采样；HX 检查通过不等于阶段完成或物理模型验收。</p></div>`:"";
+  const temps=svgLine([{x:RS.tau_min,y:RS.bed_in_C,color:"#B97708",w:1.8,breaks},{x:RS.tau_min,y:RS.bed_out_C,color:"#E3A83A",breaks},...(hasValues(RS.t2in_C)?[{x:RS.tau_min,y:RS.t2in_C,color:"#1264FF",dash:true,breaks},{x:RS.tau_min,y:RS.t2out_C,color:"#7FA3FF",breaks}]:[])],{title:"四端温度 (°C)",xlabel:"min"});
+  const power=R?RS.bed_power_W:(S.q_bed_W||[]).map(v=>v==null?null:(s.mode==="discharge"?-v:v));
+  const energy=R?RS.bed_energy_MJ:(S.e_bed_MJ||[]).map(v=>v==null?null:(s.mode==="discharge"?-v:v));
+  const qe=svgLine([{x:RS.tau_min,y:power.map(v=>v==null?null:v/1000),color:"#101827",breaks}],{title:(s.mode==="discharge"?"床层放热功率 (kW)":"床层吸热功率 Q_bed (kW)"),xlabel:"min",ymin:0});
+  const ee=svgLine([{x:RS.tau_min,y:energy,color:"#1264FF",w:1.8,breaks},...(!R?[{x:S.tau_min,y:S.e_wall_MJ,color:"#8490A3",dash:true}]:[])],{title:(s.mode==="discharge"?"累计放热":"累计吸热")+(R?" · 有符号记录积分 (MJ)":" 与壁损估计 (MJ)"),xlabel:"min",ymin:0});
+  const notes=qualityNotes(s), q=c.quality||{}, diagnostics=q.diagnostics||{};
+  const quality=`<div class="sec"><h4>阶段记录与质量</h4>${kv([["批次",esc(datasetLabel(datasetId(c)))],["工况 / 阶段",esc(c.condition_id||c.case_id)+" / "+phaseLabel(s)],["记录状态",PHASE_STATUS[M.phase_status||q.status]||M.phase_status||q.status||"历史记录"],["UDF 来源",esc(q.udf_source_status||"未单独标注")],["诊断记录",esc(diagnostics.status||"")],["诊断文件",diagnostics.file?esc(diagnostics.file):null]])}${notes.length?`<div class="note"><ul class="list">${notes.map(n=>`<li>${esc(n)}</li>`).join("")}</ul></div>`:""}<p class="dim">有记录表示报告可读取；是否完成充放热、相变是否完成及充放热初始场衔接，仍需结合终点与 checkpoint 证据判断。</p></div>`;
   let metricRows;
   if(s.mode==="charge") metricRows=[["出口到 190 °C",M.t190_bed_out_min!=null?g(M.t190_bed_out_min)+" min":"未到"],["E_bed 0–240 min",g(M.E_bed_240_MJ)+" MJ"],["E_bed 全程（空气侧）",g(M.E_bed_air_full_MJ)+" MJ"],["壁损估计 / 净储能",g(M.E_wall_est_MJ)+" / "+g(M.E_bed_net_est_MJ)+" MJ"],["η_b 0–240 / 全程",(pct(M.eta_b_240)||"—")+" / "+(pct(M.eta_b_full)||"—")],["E_src / E_gain 0–240",M.Ex_src_240_MJ!=null?g(M.Ex_src_240_MJ)+" / "+g(M.Ex_gain_240_MJ)+" MJ":null]];
   else if(s.mode==="discharge") metricRows=[["峰值放热（时刻）",g(M.E_rel_peak_MJ)+" MJ @ "+g(M.t_peak_min)+" min"],["放出 50 % / 90 %",g(M.t50_min)+" / "+g(M.t90_min)+" min"],["出口到 100 / 80 / 65 °C",[M.t_bedout_below_100C_min,M.t_bedout_below_80C_min,M.t_bedout_below_65C_min].map(g).join(" / ")+" min"],["峰值前壁损",g(M.E_wall_to_peak_MJ)+" MJ"],["η_b,dis（到峰值）",pct(M.eta_b_dis)],["E_rel / E_del / E_D",M.Ex_rel_MJ!=null?[M.Ex_rel_MJ,M.Ex_del_MJ,M.Ex_D_HX_MJ].map(g).join(" / ")+" MJ":null],["T₂,out 最高 / 能量加权",M.T2out_max_C!=null?g(M.T2out_max_C)+" / "+g(M.T2out_energy_weighted_C)+" °C":null]];
   else metricRows=[["出口到 190 °C",g(M.t190_bed_out_min)+" min"],["E_bed 0–240 min",g(M.E_bed_240_MJ)+" MJ"],["入口流㶲 / 排烟㶲 0–240",g(M.Ex_src_240_MJ)+" / "+g(M.Ex_exhaust_240_MJ)+" MJ"],["η_b 0–240",pct(M.eta_b_240)]];
+  if(R){
+    const rm=R.metrics;
+    metricRows=[["床层累计净换热（末值）",g(rm.bed_energy_end_MJ)+" MJ"],["床层累计净换热（峰值 / 时刻）",g(rm.bed_energy_peak_MJ)+" MJ / "+g(rm.bed_energy_peak_time_min)+" min"],["有效积分时间 / 平均功率",g(rm.bed_energy_covered_min)+" min / "+g(rm.bed_average_power_W)+" W"],["末端 PCM 测点均温 / 极差",g(rm.pcm_mean_C_end)+" °C / "+g(rm.pcm_spread_K_end)+" K"],["缺口 / 未积分跨度",g(rm.gap_count)+" / "+g(rm.gap_duration_min)+" min"],...(s.mode==="discharge"?[["交付净热量 / 温度㶲（末值）",g(rm.delivered_heat_end_MJ)+" / "+g(rm.delivered_exergy_end_MJ)+" MJ"]]:[["外部热源热量 / 温度㶲（末值）",g(rm.source_heat_end_MJ)+" / "+g(rm.source_exergy_end_MJ)+" MJ"]])];
+  }
   $("#dBody").innerHTML=`
-    <div class="sec"><h4>状态</h4><p><span class="status-badge ${statusClass(M.data_status)}"><span class="d"></span><b>${M.data_status||"—"}</b></span></p><p class="dim">${M.status_reason||""}</p>${(c.review_reasons||[]).length?`<div class="note">${c.review_reasons.join("；")}</div>`:""}${(c.warnings||[]).length?`<p class="dim" style="margin-top:6px">${c.warnings.join("；")}</p>`:""}</div>
-    <div class="sec"><h4>来源</h4>${kv([["运行时间",c.run_datetime],["项目 / 设计点",(c.project||"")+" / "+(c.design_point_dir||"")],["主机",c.source&&c.source.host],["UDF 源",c.source&&c.source.udf],["续算起点",c.restart_from_step?"第 "+c.restart_from_step+" 步":null],[".h5",(c.source&&c.source.h5_files||[]).join(", ")||null],["参数来源",{udf:"libudf/src",data:"数据反推",override:"覆盖文件",manual:"人工/文件夹名"}[c.params_source]||c.params_source],["备注",c.note||null],["标签",(c.tags||[]).join(", ")||null]])}</div>
+    <div class="sec"><h4>参数与诊断状态</h4><p><span class="status-badge ${statusClass(M.data_status)}"><span class="d"></span><b>${M.data_status||"—"}</b></span></p><p class="dim">${M.status_reason||""}</p></div>
+    ${quality}
+    <div class="sec"><h4>来源</h4>${kv([["来源归档时间",c.run_datetime],["时间依据",(c.run_datetime_basis||(c.source&&c.source.run_datetime_basis))==="file_mtime"?"文件 mtime，仅用于归档排序":esc(c.run_datetime_basis||(c.source&&c.source.run_datetime_basis)||"历史记录，依据未单独标注")],["项目 / 设计点",(c.project||"")+" / "+(c.design_point_dir||"")],["主机",c.source&&c.source.host],["来源目录",c.source&&c.source.fluent_dir?esc(c.source.fluent_dir):null],["UDF 源",c.source&&c.source.udf?esc(c.source.udf):null],["续算起点",c.restart_from_step?"第 "+c.restart_from_step+" 步":null],[".h5",(c.source&&c.source.h5_files||[]).join(", ")||null],["参数来源",{udf:"libudf/src",data:"数据反推",override:"覆盖文件",manual:"人工/文件夹名"}[c.params_source]||c.params_source],["备注",c.note||null],["标签",(c.tags||[]).join(", ")||null]])}</div>
     <div class="sec"><h4>参数</h4>${kv([["UA",p.UA_W_K!=null?g(p.UA_W_K)+" W/K":null],["ṁ₂ / T₂,in",p.mdot2_kg_h!=null?g(p.mdot2_kg_h)+" kg/h / "+g(p.T2in_C)+" °C":null],["ṁ₁",g(p.mdot1_kg_h||40)+" kg/h"],["W₁ / W₂",p.W1_W_K!=null?g(p.W1_W_K)+" / "+g(p.W2_W_K)+" W/K":null],["C_r / NTU / ε 理论",p.NTU!=null?g(p.Cr)+" / "+g(p.NTU)+" / "+g(p.eps_theory):null],["流向",s.st.reversed_flow?"zone 9 进（反转）":"zone 8 进"],["Δt / 步数",g(c.dt_s)+" s / "+(c.first_step??"?")+"→"+(c.last_step??"?")],["数据反推",dc&&dc.mdot1_kg_h?`ṁ₁ ${g(dc.mdot1_kg_h)}${dc.mdot2_kg_h?" · ṁ₂≈"+g(dc.mdot2_kg_h):""}${dc.UA_eff_W_K!=null?(dc.UA_identifiable?" · UA_eff≈"+g(dc.UA_eff_W_K):" · UA≥"+g(dc.UA_eff_W_K)+"(ε≈1)"):""}`:null]])}</div>
-    <div class="sec"><h4>指标</h4>${kv([["时长 / 点数",g(M.duration_min)+" min / "+M.n_points],["起始 入口 / 出口",g(M.bed_in_start_C)+" / "+g(M.bed_out_start_C)+" °C"],["末端 入口 / 出口",g(M.bed_in_end_C)+" / "+g(M.bed_out_end_C)+" °C"],...metricRows,["UA_eff 中位数 / 比值",M.UA_eff_median_W_K!=null?g(M.UA_eff_median_W_K)+" W/K / "+g(M.UA_eff_ratio):null],["ε 实际 / 理论",M.eps_actual_median!=null?M.eps_actual_median.toFixed(3)+" / "+g(M.eps_theory):null],["两侧能量不平衡中位数",M.energy_imbalance_median_pct!=null?M.energy_imbalance_median_pct.toFixed(2)+" %":null],["尾段功率（壁损）",g(M.q_bed_tail_W)+" W"]])}</div>
-    <div class="sec"><h4>曲线（120 点降采样）</h4>${legend([{color:"#B97708",label:"床层入口"},{color:"#E3A83A",label:"床层出口"},...(S.t2in_C?[{color:"#1264FF",label:"T₂,in"},{color:"#7FA3FF",label:"T₂,out"}]:[])])}${temps}${qe}${legend([{color:"#1264FF",label:s.mode==="discharge"?"累计放热":"累计吸热"},{color:"#8490A3",label:"壁损估计"}])}${ee}</div>
+    <div class="sec"><h4>阶段指标</h4>${kv([["原始 flow-time 起止",g(M.t_start_s)+" → "+g(M.t_end_s)+" s"],["有效记录跨度 / 点数",g(M.recorded_duration_min??M.duration_min)+" min / "+(M.n_points??(S.tau_min||[]).length)],["起始 入口 / 出口",g(M.bed_in_start_C)+" / "+g(M.bed_out_start_C)+" °C"],["末端 入口 / 出口",g(M.bed_in_end_C)+" / "+g(M.bed_out_end_C)+" °C"],...metricRows,["UA_eff 中位数 / 比值",M.UA_eff_median_W_K!=null?g(M.UA_eff_median_W_K)+" W/K / "+g(M.UA_eff_ratio):null],["ε 实际 / 理论",M.eps_actual_median!=null?M.eps_actual_median.toFixed(3)+" / "+g(M.eps_theory):null],["两侧能量不平衡中位数",M.energy_imbalance_median_pct!=null?M.energy_imbalance_median_pct.toFixed(2)+" %":null],["尾段边界功率（非壁损实测）",g(M.q_bed_tail_W)+" W"]])}</div>
+    ${diag}
+    ${pcmChartSection(s)}
+    <div class="sec"><h4>边界与能量曲线</h4><p class="dim">${timeAxisNote(s)}${samplingNote}${R?"功率保留符号；累计量从首条记录开始，不跨缺步积分；曲线在缺口处断开。正值分别表示床层吸热或释热，负值表示反向传热。壁损和辅机未计入。":""}</p>${legend([{color:"#B97708",label:"床层入口"},{color:"#E3A83A",label:"床层出口"},...(hasValues(S.t2in_C)?[{color:"#1264FF",label:"T₂,in"},{color:"#7FA3FF",label:"T₂,out"}]:[])])}${temps}${qe}${legend([{color:"#1264FF",label:s.mode==="discharge"?"累计放热":"累计吸热"},...(!R?[{color:"#8490A3",label:"壁损估计"}]:[])])}${ee}${!playable(s)?'<p class="note">当前阶段缺少可回放的边界温度记录，回放已禁用。</p>':""}</div>
     <div class="sec"><h4>文件</h4><p class="dim">${(c.files||[]).length} 个 .out：${(c.files||[]).slice(0,8).map(f=>f.name).join("、")}${(c.files||[]).length>8?" …":""}</p></div>`;
-  $("#dActions").innerHTML=`<button class="primary" id="actPlay">在演示中回放</button><button id="actCopy">复制 case_id</button>`; $("#dActions").classList.add("on");
+  renderPcmChart(s);
+  $("#dActions").innerHTML=`<button class="primary" id="actPlay" ${playable(s)?"":"disabled"}>在演示中回放</button>${datasetId(c)==="retest-2026-10"?`<a class="btn" href="#research/${encodeURIComponent(sid)}">研究指标与配对</a>`:""}<button id="actCopy">复制 case_id</button>`; $("#dActions").classList.add("on");
   $("#actPlay").onclick=()=>{ loadStage(sid,{keepInfo:true}); go("demo"); };
   $("#actCopy").onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(c.case_id); $("#actCopy").textContent="已复制"; setTimeout(()=>$("#actCopy").textContent="复制 case_id",1200); };
 }
